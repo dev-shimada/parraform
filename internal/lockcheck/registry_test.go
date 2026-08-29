@@ -12,7 +12,7 @@ import (
 // backend silently never get checked via the real Discover -> For(cfg.Type)
 // path, with every existing test still green.
 func TestRegistry_ClaimedBackendsAreReachable(t *testing.T) {
-	want := []string{"s3", "gcs", "azurerm", "remote", "cloud", "consul", "kubernetes", "pg"}
+	want := []string{"s3", "gcs", "azurerm", "remote", "cloud", "consul", "kubernetes", "pg", "cos", "oci", "oss"}
 	if runtime.GOOS != "windows" {
 		// local's Peek uses syscall.Flock and only builds on !windows.
 		want = append(want, "local")

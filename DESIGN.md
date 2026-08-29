@@ -104,6 +104,22 @@ HCLパースは不要。
   ロック保持者情報（Who）はどこにも永続化されずロック取得プロセスの
   メモリ内にのみ存在する（`client.go`のLock()/Unlock()実装を確認済み）ため、
   このbackendでは`Info.Who`は常に空になる（意図した挙動）。
+- cos: S3類似で default は `<prefix>/<key>`、それ以外は
+  `<prefix>/<workspace>/<key>`（`backend_state.go`の`stateFile()`を確認済み）。
+  ロックファイルは`stateFile()+".tflock"`（`lockFileSuffix`定数を確認済み）で、
+  COSオブジェクトとして存在確認するだけでよい（Tags APIによる分散ロックは
+  Lock()実行時の競合防止用で、peekには不要）。
+- oci: S3と同じ形で、defaultは`<key>`そのまま、それ以外は
+  `<workspace_key_prefix>/<workspace>/<key>`（デフォルトprefixは
+  `"tf-state-env"`）。ロックファイルは`path(name)+".lock"`（`gh api`で
+  `backend.go`の生ソースを直接確認し、`lockFileSuffix = ".lock"`であることを
+  検証— `.tflock`ではない点に注意。他backendとの類推で書くと間違えるところ
+  だった）。
+- oss: cos/ociと同じ`<prefix>/<key>`系だが、ロック機構自体がS3のDynamoDB
+  相当（別サービスのTableStore、行キー`"LockID"`列＝`"<bucket>/<stateFile>"`）
+  である点が異なる（`client.go`の`lockPath()`/`pkName`を確認済み）。
+  `tablestore_table`が未設定ならterraform自身もロックしないため、その場合は
+  `supported=false`を返す。
 
 ### 対応バックエンド一覧（remote stateに設定可能な全種別が対象）
 
@@ -122,29 +138,37 @@ HCLパースは不要。
 | cloud (`cloud{}`ブロック、TFC/TFE) | 同上。`workspaces.name`固定のみ対応、`tags`/`project`による動的ワークスペース解決は非対応 | 同上 | 実装済み(範囲限定) |
 | consul | `<path>/.lockinfo` キーへのKV GET(存在確認) | `kv:read` (ACL有効時) | 実装済み |
 | kubernetes | `coordination.k8s.io/v1 Lease` の `holderIdentity` 確認(GET) | leaseへのget権限 | 実装済み |
-| pg (Postgres) | advisory lockへの非ブロッキング試行+即解放(localと同じ手法) | 接続権限のみ | 実装済み(**実DB未検証**、後述) |
-| oss (Alibaba Cloud OSS) | ロック方式を一次情報で確認できず | - | **意図的に未対応**(後述) |
-| cos (Tencent Cloud COS) | ロック方式を一次情報で確認できず | - | **意図的に未対応**(後述) |
-| oci (Oracle Cloud Infrastructure) | ロック方式を一次情報で確認できず | - | **意図的に未対応**(後述) |
+| pg (Postgres) | advisory lockへの非ブロッキング試行+即解放(localと同じ手法) | 接続権限のみ | 実装済み(**実DB未検証**) |
+| cos (Tencent Cloud COS) | `<stateFile>.tflock` オブジェクトのGetObject(存在確認) | オブジェクト読み取り権限 | 実装済み |
+| oci (Oracle Cloud Infrastructure) | `<path(workspace)>.lock` オブジェクトのGetObject(存在確認) | オブジェクト読み取り権限 | 実装済み |
+| oss (Alibaba Cloud OSS) | TableStoreの対応行へのGetRow(存在確認)。`tablestore_table`未設定時はterraform自体がロックしないため対応不可 | TableStore読み取り権限 | 実装済み(**実インスタンス未検証**) |
 | http | Peek手段なし(LOCK/UNLOCKのみでpeek用APIがcontractに存在しない) | - | 対応不可(ポータブル動作にフォールバック) |
 
-**remote/cloudの注意点**: `workspaces` ネストブロックがキャッシュJSON内でどの
-形（単一map / 要素数1のlist）で表現されるかは、実際のTFC/TFEアカウントを
-使ったキャッシュファイルで検証できていない（terraformのschemaソースからの
-推測に留まる）。抽出コードは両方の形を試し、想定外の形なら安全に
-`supported=false`へフォールバックする設計にしてあるため、誤ったロック識別子
-で偽の警告を出す心配はない（最悪ケースはチェックが黙ってスキップされるだけ）。
-TFC/TFEアカウントで実際に検証できる機会があれば要再確認。
+**全11種別（`local`除く）に到達済み**。すべてterraform本体のソース
+（`internal/backend/remote-state/<name>/`配下の`client.go`/`backend.go`/
+`backend_state.go`）を直接参照してロック識別子の組み立て方を確認しており、
+推測で実装したものはない。ただし検証の深さには差があり、3段階の信頼度が
+ある:
 
-**oss/cos/ociを意図的に未対応とした理由**: この3つはS3/GCS/AzureRMのように
-terraform本体のソースを直接参照してロック識別子の組み立て方を検証する
-ところまで到達できておらず、一次情報のない推測でLockCheckerを書くと
-「間違ったロック識別子で自信満々に警告を出す/出さない」という、ワークスペース
-バグで一度踏んだのと同じ失敗を再現しかねない。設定の抽出だけ失敗するのと
-違い、ロック機構そのものの理解が不確実なため、`supported=false`にすらならず
-誤答するリスクがある。よって未登録のまま（`lockcheck.For`が見つからず
-ポータブル動作にフォールバック）とし、一次情報（terraform本体のソース、
-または実際のクラウド環境での検証）にアクセスできた時点で追加する。
+1. **ソース確認＋実際のSDK配線を実機/httptestで検証済み**: local, s3, gcs,
+   azurerm, consul, kubernetes, cos, oci。SDKが実際に送信するHTTPリクエスト
+   （パス・エラー型・404判定等）を`httptest`サーバー（kubernetesのみ
+   client-goのfake clientset）に対して動かして確認している。
+2. **ソース確認のみ、実DB/実インスタンス統合テストは未実施**: pg, oss。
+   pgはPostgresのワイヤプロトコルが、ossが使うTableStoreはprotobufベースの
+   プロトコルが、httptestで手軽に模擬できない。この環境ではdocker/実DBへの
+   アクセスも得られなかった。純粋なロジック（識別子組み立て等）のみ単体
+   テスト済み。実環境で検証できる機会があれば優先的に再確認すべき。
+3. **ソース確認＋実機/httptest検証済みだが範囲を限定**: remote/cloud
+   （TFC/TFE）。`workspaces`ネストブロックがキャッシュJSON内でどの形
+   （単一map / 要素数1のlist）で表現されるかは実際のTFC/TFEアカウントで
+   検証できておらず、抽出コードは両方の形を試して想定外なら安全に
+   `supported=false`へフォールバックする。`cloud{}`の`tags`/`project`による
+   動的ワークスペース解決も非対応（`workspaces.name`固定のみ）。
+
+いずれの場合も、確信が持てない箇所は「間違ったロック識別子で自信満々に
+警告を出す/出さない」ことを避け、`supported=false`で安全側にフォールバック
+する設計を徹底している（ワークスペース対応漏れのバグを一度踏んだ際の教訓）。
 
 `LockChecker` インターフェースで抽象化し、バックエンドごとに実装を追加。
 各SDKの依存分離は行わず、**単一バイナリに全部同梱**する方針で決定済み
@@ -239,6 +263,16 @@ read-after-write一貫性があるため、apply中のplanが「壊れた」状�
   `client_secret`/OIDC/サービスプリンシパル証明書などterraform本体が
   対応する認証方式の大半はMVPの対象外（該当構成ではAzure SDK側の
   `azidentity` オプションを追加実装する必要がある）。
+- cosのpeekは`secret_id`/`secret_key`（`TENCENTCLOUD_SECRET_ID`/
+  `TENCENTCLOUD_SECRET_KEY`環境変数フォールバック込み）のみ対応。
+  `assume_role`によるロール引き受けは未対応。
+- ociのpeekは`tenancy_ocid`/`user_ocid`/`fingerprint`/`private_key`が
+  揃っている場合のみ直接認証し、なければSDKの`~/.oci/config`
+  （`config_file_profile`、デフォルト`DEFAULT`）にフォールバックする。
+  Instance Principal / Resource Principal / Security Token認証はMVP対象外。
+- ossのpeekは`access_key`/`secret_key`（`ALICLOUD_ACCESS_KEY`/
+  `ALICLOUD_SECRET_KEY`環境変数フォールバック込み）のみ対応。STSトークンや
+  ECSロールによる認証は未対応。
 - pgのpeekは**実際のPostgresサーバーに対して未検証**。HTTPベースの他backend
   と違いワイヤプロトコルがhttptestで手軽に模擬できず、統合テスト用の
   Docker/実DBへのアクセスもこの環境では得られなかった。実装はterraform本体の

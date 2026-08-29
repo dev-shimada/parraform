@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -46,11 +47,24 @@ func init() {
 type pgChecker struct{}
 
 func (pgChecker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bool, error) {
+	// conn_str and schema_name both fall back to PG_CONN_STR/PG_SCHEMA_NAME
+	// env vars in terraform's own pg backend (verified from backend.go's
+	// Configure(), via backendbase.NewSDKLikeData). That resolution
+	// happens inside terraform at Configure() time, not before the config
+	// is cached to .terraform/terraform.tfstate, so a config that omits
+	// these attributes in favor of the env var (the common CI pattern)
+	// would otherwise silently look unconfigured here.
 	connStr, _ := cfg.Config["conn_str"].(string)
+	if connStr == "" {
+		connStr = os.Getenv("PG_CONN_STR")
+	}
 	if connStr == "" {
 		return Info{}, false, nil
 	}
 	schema, _ := cfg.Config["schema_name"].(string)
+	if schema == "" {
+		schema = os.Getenv("PG_SCHEMA_NAME")
+	}
 	if schema == "" {
 		schema = "terraform_remote_state"
 	}
