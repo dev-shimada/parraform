@@ -1,0 +1,104 @@
+package lockcheck
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"cloud.google.com/go/storage"
+	"google.golang.org/api/option"
+)
+
+func testGCSClient(t *testing.T, srv *httptest.Server) *storage.Client {
+	t.Helper()
+	client, err := storage.NewClient(context.Background(),
+		option.WithEndpoint(srv.URL),
+		option.WithoutAuthentication(),
+	)
+	if err != nil {
+		t.Fatalf("storage.NewClient() error = %v", err)
+	}
+	t.Cleanup(func() { client.Close() })
+	return client
+}
+
+func TestGCSLockObject(t *testing.T) {
+	cases := []struct {
+		name      string
+		prefix    string
+		workspace string
+		want      string
+	}{
+		{"default workspace, no prefix", "", "default", "default.tflock"},
+		{"default workspace with prefix", "terraform/state", "default", "terraform/state/default.tflock"},
+		{"non-default workspace", "terraform/state", "staging", "terraform/state/staging.tflock"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := gcsLockObject(c.prefix, c.workspace); got != c.want {
+				t.Errorf("gcsLockObject(%q, %q) = %q, want %q", c.prefix, c.workspace, got, c.want)
+			}
+		})
+	}
+}
+
+func TestPeekGCSLockfile_NotLocked(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"error":{"code":404,"message":"not found"}}`)
+	}))
+	defer srv.Close()
+
+	client := testGCSClient(t, srv)
+	obj := client.Bucket("my-bucket").Object("terraform/state/default.tflock")
+
+	info, supported, err := peekGCSLockfile(context.Background(), obj)
+	if err != nil {
+		t.Fatalf("peekGCSLockfile() error = %v", err)
+	}
+	if !supported {
+		t.Fatal("peekGCSLockfile() supported = false, want true")
+	}
+	if info.Locked {
+		t.Errorf("info.Locked = true, want false")
+	}
+}
+
+func TestPeekGCSLockfile_Locked(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"ID":"abc-123","Who":"runner@github-actions"}`)
+	}))
+	defer srv.Close()
+
+	client := testGCSClient(t, srv)
+	obj := client.Bucket("my-bucket").Object("terraform/state/default.tflock")
+
+	info, supported, err := peekGCSLockfile(context.Background(), obj)
+	if err != nil {
+		t.Fatalf("peekGCSLockfile() error = %v", err)
+	}
+	if !supported {
+		t.Fatal("peekGCSLockfile() supported = false, want true")
+	}
+	if !info.Locked {
+		t.Errorf("info.Locked = false, want true")
+	}
+	if info.Who != "runner@github-actions" {
+		t.Errorf("info.Who = %q, want %q", info.Who, "runner@github-actions")
+	}
+}
+
+func TestGCSChecker_Peek_MissingBucket(t *testing.T) {
+	c := gcsChecker{}
+	cfg := testBackendConfig(map[string]any{"prefix": "terraform/state"})
+	_, supported, err := c.Peek(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Peek() error = %v", err)
+	}
+	if supported {
+		t.Error("Peek() supported = true, want false (missing bucket)")
+	}
+}

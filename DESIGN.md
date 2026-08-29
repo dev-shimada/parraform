@@ -76,21 +76,36 @@ HCLパースは不要。
 - local: default以外は `<pathのdir>/terraform.tfstate.d/<workspace>/<pathのbasename>`
 - S3: default以外は `<workspace_key_prefix>/<workspace>/<key>`
   （`workspace_key_prefix` のデフォルトは `env:`）
+- GCS: `<prefix>/<workspace>.tflock`。**defaultも特別扱いされず**
+  `<prefix>/default.tflock` になる（terraform本体のソース
+  `internal/backend/remote-state/gcs/backend_state.go` の `stateFile`/
+  `lockFile` を確認済み。S3/localとは違いdefaultの特別扱いがない点に注意）。
 
-| Backend | Peek方法 | 必要権限 |
-|---|---|---|
-| S3 (native lockfile, `use_lockfile`, TF≥1.11) | `<key>.tflock` オブジェクトの HeadObject/GetObject | `s3:GetObject` |
-| S3 (legacy, DynamoDB) | `LockID = "<bucket>/<key>"` で GetItem | `dynamodb:GetItem` |
-| GCS | `<prefix>/<name>.tflock` オブジェクトの存在確認（object generation） | `storage.objects.get` |
-| Local | state ファイルへの non-blocking flock 試行（即解放） | 不要（検証済み） |
-| AzureRM | state blob の `x-ms-lease-status` ヘッダ確認 | 実装時に要検証 |
-| Terraform Cloud/Enterprise（`backend "remote"` / `cloud`ブロック） | `Workspaces.Read` の `Locked`/`LockedBy` を参照 | TFEの読み取りトークン |
-| それ以外（http, Consul, Postgres 等） | Peek手段なし → ポータブル動作にフォールバック（チェック省略、`-lock=false` のみ適用） |
+### 対応バックエンド一覧（remote stateに設定可能な全種別が対象）
 
-`LockChecker` インターフェースで抽象化し、バックエンドごとに実装を追加できる形に
-する。**S3（native lockfile対応、DynamoDBフォールバック）+ local は実装済み**。
-GCS / AzureRM / Terraform Cloud は後続で追加する。TFC/TFEはAPI一発でロック状態が
-取れるため、S3/GCS/Azureより実装コストは低い。優先度は要件次第で前後してよい。
+現在のterraform公式ドキュメントに掲載されているbackend種別は以下の11種類
+（`local`を除く）。**このうち到達可能なもの全てにLockCheckerを実装する**の
+が方針。
+
+| Backend | Peek方法 | 必要権限/前提 | 状態 |
+|---|---|---|---|
+| local | state ファイルへの non-blocking flock 試行(即解放) | 不要 | 実装済み |
+| s3 (native lockfile, `use_lockfile`, TF≥1.11) | `<effective key>.tflock` の GetObject | `s3:GetObject` | 実装済み |
+| s3 (legacy, DynamoDB) | `LockID="<bucket>/<effective key>"` で GetItem | `dynamodb:GetItem` | 実装済み |
+| gcs | `<prefix>/<workspace>.tflock` の存在確認(NewReader) | `storage.objects.get` | 実装済み |
+| azurerm | state blob の `x-ms-lease-status` ヘッダ確認(GetBlobProperties) | blob読み取り権限 | 未実装 |
+| remote (`backend "remote"` / `cloud`ブロック、TFC/TFE) | `go-tfe` の `Workspaces.Read` で `Locked`/`LockedBy` | TFEの読み取りトークン(`credentials.tfrc.json`/`TF_TOKEN_*`) | 未実装 |
+| consul | KVエントリの `Session` フィールド確認(read-only GET) | `kv:read` (ACL有効時) | 未実装 |
+| kubernetes | `coordination.k8s.io/v1 Lease` の `holderIdentity` 確認(GET) | leaseへのget/list権限 | 未実装 |
+| pg (Postgres) | advisory lockへの非ブロッキング試行+即解放(localと同じ手法) | 接続権限のみ | 未実装 |
+| oss (Alibaba Cloud OSS) | S3類似 + Tablestoreでのロック確認 | 要調査 | 未実装 |
+| cos (Tencent Cloud COS) | ロック方式を要調査 | 要調査 | 未実装 |
+| oci (Oracle Cloud Infrastructure) | ロック方式を要調査 | 要調査 | 未実装 |
+| http | Peek手段なし(LOCK/UNLOCKのみでpeek用APIがcontractに存在しない) | - | 対応不可(ポータブル動作にフォールバック) |
+
+`LockChecker` インターフェースで抽象化し、バックエンドごとに実装を追加。
+各SDKの依存分離は行わず、**単一バイナリに全部同梱**する方針で決定済み
+（ビルド・配布のシンプルさを優先。バイナリサイズ・ビルド時間の増加は許容）。
 
 ### 利用ライブラリの検討
 
