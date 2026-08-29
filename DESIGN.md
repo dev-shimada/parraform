@@ -153,7 +153,16 @@ HCLパースは不要。
 1. **ソース確認＋実際のSDK配線を実機/httptestで検証済み**: local, s3, gcs,
    azurerm, consul, kubernetes, cos, oci。SDKが実際に送信するHTTPリクエスト
    （パス・エラー型・404判定等）を`httptest`サーバー（kubernetesのみ
-   client-goのfake clientset）に対して動かして確認している。
+   client-goのfake clientset）に対して動かして確認している。ただし
+   **この検証はテストが直接クライアントを構築している範囲に限られる**。
+   実運用でのクライアント構築処理（`ossClient`/`gcsClientOptions`/
+   `azurermClient`/`cosClient`/`ociClient`等、認証情報からSDKクライアントを
+   組み立てる部分）自体はテストの対象外で、httptestで直接検証してはいない。
+   例えばcosのbucket URL形式（`https://<bucket>.cos.<region>.myqcloud.com`）は
+   `backend.go`のソースで直接確認したが、`accelerate`/カスタム`endpoint`指定時
+   の別URL形式には対応していない（未対応の構成では接続エラーとなり
+   `supported=false`にフォールバックするため、誤ったエンドポイントに接続する
+   心配はない）。
 2. **ソース確認のみ、実DB/実インスタンス統合テストは未実施**: pg, oss。
    pgはPostgresのワイヤプロトコルが、ossが使うTableStoreはprotobufベースの
    プロトコルが、httptestで手軽に模擬できない。この環境ではdocker/実DBへの
@@ -258,6 +267,15 @@ read-after-write一貫性があるため、apply中のplanが「壊れた」状�
   peekはエラー扱いになり、警告は出ない。タイムアウトと「未ロック」はユーザー
   から見て区別できない（意図的なトレードオフ。速度を優先し、peek失敗時に
   余計なノイズを出さない設計を維持するため、明示的にこの形で決定した）。
+  **`ctx`を渡すだけでは不十分な場合があることを実装時に確認した**:
+  `go-tfe`の`NewClient`はクライアント構築時に`ctx`を受け取らない同期的な
+  `GET /api/v2/ping`をリトライ付きで実行し（TFC/TFEホストが遅い/到達不能だと
+  ここで詰まる）、ossが使う`tablestore.GetRow`もctxを引数に取らない古い
+  シグネチャである。`checker.Peek`内部で`ctx`を無視されても確実にタイムアウト
+  させるため、`cmd/parraform/main.go`の`peekWithTimeout`は`Peek`を
+  goroutineで実行し`select`で競わせる方式にしている。タイムアウトした
+  goroutineは回収せず放置する（直後に`syscall.Exec`でプロセスイメージが
+  丸ごと置き換わるため、リークとして残る心配がない）。
 - azurermのpeekは `access_key`（共有キー）か、なければAzure SDKの
   `DefaultAzureCredential`（Azure CLIログイン/環境変数/MSI等）のみ対応。
   `client_secret`/OIDC/サービスプリンシパル証明書などterraform本体が

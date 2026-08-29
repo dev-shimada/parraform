@@ -97,10 +97,7 @@ func warnIfLocked(argv []string) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	info, supported, err := checker.Peek(ctx, *cfg)
+	info, supported, err := peekWithTimeout(checker, *cfg, timeout)
 	if err != nil || !supported || !info.Locked {
 		return
 	}
@@ -112,4 +109,41 @@ func warnIfLocked(argv []string) {
 	fmt.Fprintf(os.Stderr,
 		"parraform: warning: state lock is currently held (holder: %s) — running plan unlocked against a possibly-changing state\n",
 		who)
+}
+
+// peekWithTimeout enforces timeout even when checker.Peek doesn't honor
+// ctx internally. Some backend SDKs make blocking calls that ignore the
+// context passed to them entirely -- go-tfe's client construction does a
+// synchronous, ctx-less GET /api/v2/ping with its own retry/backoff, and
+// the oss backend's tablestore SDK's GetRow takes no context parameter at
+// all -- so relying solely on ctx cancellation inside Peek does not
+// actually bound those two checkers to PARRAFORM_LOCK_CHECK_TIMEOUT. This
+// wraps the call in a goroutine and races it against the timeout instead.
+//
+// If the goroutine doesn't finish in time, it's abandoned rather than
+// waited on: the process is about to exec() the real terraform binary
+// (replacing this process image entirely on Unix), so there is nothing
+// to clean up and no leaked resource that outlives the parraform process.
+func peekWithTimeout(checker lockcheck.Checker, cfg backendcfg.Config, timeout time.Duration) (lockcheck.Info, bool, error) {
+	type result struct {
+		info      lockcheck.Info
+		supported bool
+		err       error
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	ch := make(chan result, 1)
+	go func() {
+		info, supported, err := checker.Peek(ctx, cfg)
+		ch <- result{info, supported, err}
+	}()
+
+	select {
+	case r := <-ch:
+		return r.info, r.supported, r.err
+	case <-ctx.Done():
+		return lockcheck.Info{}, false, ctx.Err()
+	}
 }
