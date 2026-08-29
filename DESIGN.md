@@ -80,6 +80,13 @@ HCLパースは不要。
   `<prefix>/default.tflock` になる（terraform本体のソース
   `internal/backend/remote-state/gcs/backend_state.go` の `stateFile`/
   `lockFile` を確認済み。S3/localとは違いdefaultの特別扱いがない点に注意）。
+- azurerm: default以外は `<key>` に `"env:" + workspace` を**区切り文字なしで
+  文字列連結**する（terraform本体のソース `internal/backend/remote-state/azure/
+  backend_state.go` の `Backend.path()` を確認済み。他backendの `/` 区切りとは
+  異なる独特な命名）。ロックはstate blob自体のリース（別オブジェクトではない）
+  で行われ、ロック情報（Who等）はblob本体ではなく `terraformlockid` という
+  blobメタデータキーにbase64+JSONで格納される（`client.go` のLock()実装を
+  確認済み）。
 
 ### 対応バックエンド一覧（remote stateに設定可能な全種別が対象）
 
@@ -93,7 +100,7 @@ HCLパースは不要。
 | s3 (native lockfile, `use_lockfile`, TF≥1.11) | `<effective key>.tflock` の GetObject | `s3:GetObject` | 実装済み |
 | s3 (legacy, DynamoDB) | `LockID="<bucket>/<effective key>"` で GetItem | `dynamodb:GetItem` | 実装済み |
 | gcs | `<prefix>/<workspace>.tflock` の存在確認(NewReader) | `storage.objects.get` | 実装済み |
-| azurerm | state blob の `x-ms-lease-status` ヘッダ確認(GetBlobProperties) | blob読み取り権限 | 未実装 |
+| azurerm | state blob の `x-ms-lease-status` ヘッダ確認(GetBlobProperties) | blob読み取り権限 | 実装済み |
 | remote (`backend "remote"` / `cloud`ブロック、TFC/TFE) | `go-tfe` の `Workspaces.Read` で `Locked`/`LockedBy` | TFEの読み取りトークン(`credentials.tfrc.json`/`TF_TOKEN_*`) | 未実装 |
 | consul | KVエントリの `Session` フィールド確認(read-only GET) | `kv:read` (ACL有効時) | 未実装 |
 | kubernetes | `coordination.k8s.io/v1 Lease` の `holderIdentity` 確認(GET) | leaseへのget/list権限 | 未実装 |
@@ -184,6 +191,11 @@ read-after-write一貫性があるため、apply中のplanが「壊れた」状�
 
 ## 実装済みの既知の制約
 
+- azurermのpeekは `access_key`（共有キー）か、なければAzure SDKの
+  `DefaultAzureCredential`（Azure CLIログイン/環境変数/MSI等）のみ対応。
+  `client_secret`/OIDC/サービスプリンシパル証明書などterraform本体が
+  対応する認証方式の大半はMVPの対象外（該当構成ではAzure SDK側の
+  `azidentity` オプションを追加実装する必要がある）。
 - S3のpeekで `s3:GetObject` はあるが `s3:ListBucket` がないIAMロールの場合、
   存在しない `.tflock` オブジェクトへのGetObjectは `NoSuchKey` ではなく
   `403 AccessDenied` になりうる。この場合 `isNotFound` が false を返して
