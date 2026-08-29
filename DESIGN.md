@@ -75,10 +75,9 @@ HCLパースは不要。
 | それ以外（http, Consul, Postgres 等） | Peek手段なし → ポータブル動作にフォールバック（チェック省略、`-lock=false` のみ適用） |
 
 `LockChecker` インターフェースで抽象化し、バックエンドごとに実装を追加できる形に
-する。初期実装は **S3（native lockfile優先、DynamoDBフォールバック）+ local** から
-着手し、GCS / AzureRM / Terraform Cloud は後続で追加する。TFC/TFEはAPI一発で
-ロック状態が取れるため、S3/GCS/Azureより実装コストは低い。優先度は要件次第で
-前後してよい。
+する。**S3（native lockfile対応、DynamoDBフォールバック）+ local は実装済み**。
+GCS / AzureRM / Terraform Cloud は後続で追加する。TFC/TFEはAPI一発でロック状態が
+取れるため、S3/GCS/Azureより実装コストは低い。優先度は要件次第で前後してよい。
 
 ### 利用ライブラリの検討
 
@@ -157,6 +156,11 @@ read-after-write一貫性があるため、apply中のplanが「壊れた」状�
 
 ## 実装済みの既知の制約
 
+- S3バックエンドのpeekはbucket/key/region/profile/dynamodb_table/use_lockfile
+  のみに対応。カスタムS3互換エンドポイント（LocalStack/MinIO等）や
+  `assume_role`によるAWSクレデンシャル取得はMVPの対象外（`config.LoadDefaultConfig`
+  のデフォルトチェーンに委ねる）。該当する構成では `s3.NewFromConfig`
+  やSTS AssumeRoleへの対応を別途追加する必要がある。
 - CI環境側が既に `TF_CLI_ARGS_plan="-lock=true"` のように設定している場合、
   parraformが末尾に追記する `-lock=false` が最後勝ちルールで優先され、
   parraformの意図（ロック未取得での実行）が黙って勝つ。これはツールの目的
