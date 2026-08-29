@@ -98,6 +98,12 @@ HCLパースは不要。
   Leaseオブジェクトの存在ではなく`Spec.HolderIdentity`が非nilかどうかで
   判定する必要がある（Unlock()はLeaseを削除せず`HolderIdentity`をnilに
   戻すだけ、`client.go`のUnlock()実装を確認済み）。
+- pg (Postgres): defaultの特別扱いはなく、`<schema_name>.states`テーブルの
+  `name`カラムに完全一致するworkspace名の行を探し、その行の`id`カラムの値を
+  advisory lockのキーとして使う（`client.go`/`backend_state.go`を確認済み）。
+  ロック保持者情報（Who）はどこにも永続化されずロック取得プロセスの
+  メモリ内にのみ存在する（`client.go`のLock()/Unlock()実装を確認済み）ため、
+  このbackendでは`Info.Who`は常に空になる（意図した挙動）。
 
 ### 対応バックエンド一覧（remote stateに設定可能な全種別が対象）
 
@@ -116,7 +122,7 @@ HCLパースは不要。
 | cloud (`cloud{}`ブロック、TFC/TFE) | 同上。`workspaces.name`固定のみ対応、`tags`/`project`による動的ワークスペース解決は非対応 | 同上 | 実装済み(範囲限定) |
 | consul | `<path>/.lockinfo` キーへのKV GET(存在確認) | `kv:read` (ACL有効時) | 実装済み |
 | kubernetes | `coordination.k8s.io/v1 Lease` の `holderIdentity` 確認(GET) | leaseへのget権限 | 実装済み |
-| pg (Postgres) | advisory lockへの非ブロッキング試行+即解放(localと同じ手法) | 接続権限のみ | 未実装 |
+| pg (Postgres) | advisory lockへの非ブロッキング試行+即解放(localと同じ手法) | 接続権限のみ | 実装済み(**実DB未検証**、後述) |
 | oss (Alibaba Cloud OSS) | ロック方式を一次情報で確認できず | - | **意図的に未対応**(後述) |
 | cos (Tencent Cloud COS) | ロック方式を一次情報で確認できず | - | **意図的に未対応**(後述) |
 | oci (Oracle Cloud Infrastructure) | ロック方式を一次情報で確認できず | - | **意図的に未対応**(後述) |
@@ -233,6 +239,12 @@ read-after-write一貫性があるため、apply中のplanが「壊れた」状�
   `client_secret`/OIDC/サービスプリンシパル証明書などterraform本体が
   対応する認証方式の大半はMVPの対象外（該当構成ではAzure SDK側の
   `azidentity` オプションを追加実装する必要がある）。
+- pgのpeekは**実際のPostgresサーバーに対して未検証**。HTTPベースの他backend
+  と違いワイヤプロトコルがhttptestで手軽に模擬できず、統合テスト用の
+  Docker/実DBへのアクセスもこの環境では得られなかった。実装はterraform本体の
+  ソース確認に基づく高い確度はあるが、`pgQuoteIdent`等の純粋なロジックのみ
+  単体テスト済みで、実際のSQL発行・セッション固定・エラー処理は未検証。
+  実DBで検証できる環境があれば優先的に再確認すべき。
 - consulのpeekは `address`/`scheme`/`datacenter`/`access_token` のみ対応。
   `ca_file`/`cert_file`/`key_file`（mTLS）は未対応（該当構成では
   `consulapi.Config` にTLS設定を追加実装する必要がある）。
