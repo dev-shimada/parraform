@@ -1,336 +1,390 @@
-# parraform 実装方針
+# parraform Design
 
-## 課題意識
+*(日本語版は[こちら](./DESIGN.ja.md))*
 
-`terraform` はremote stateのロックを使う場合、CIなどで並列に `plan` が走ると
-ロックの取り合いが発生し、CIが失敗する。`plan` はstateを書き換えないため、
-本来ロックを取得する必要はない。
+## The problem
 
-## 解決方針
+When `terraform` uses remote state locking, running `plan` in parallel in CI
+causes lock contention and CI failures. `plan` never writes state, so it
+doesn't actually need to acquire the lock in the first place.
 
-`parraform` は `terraform` コマンドへの透過ラッパー。
+## Approach
 
-- `plan` 実行時はロックを取得せず、バックエンドの実ロック状態を読み取り専用で
-  チェックするのみとし、安全な並列実行を可能にする。
-- `apply` など state を書き換えるコマンドは通常通りロックを取得・チェックし、
-  排他制御を維持する。
-- Go実装。cobraを使い、bash/zsh/fishの補完スクリプトを出力できる。
-- terraformの全コマンドと互換性を持つ（完全パススルー）。
+`parraform` is a transparent wrapper around the `terraform` command.
 
-## アーキテクチャ
+- `plan` never acquires the lock; it only performs a read-only check of the
+  backend's real lock state, enabling safe parallel execution.
+- Commands that write state, like `apply`, acquire and check the lock as
+  usual, preserving exclusivity.
+- Implemented in Go, using cobra so it can emit bash/zsh/fish completion
+  scripts.
+- Compatible with every terraform command (complete passthrough).
 
-### 実行方式
+## Architecture
 
-`terraform` 実バイナリへの薄いラッパーとして動作する。
+### Execution model
 
-- Unix: `syscall.Exec` でプロセス置換する。stdio・TTY判定・シグナル・終了コードが
-  実行結果と完全に同一になり、追加のシグナル転送コードが不要。
-- Windows: `exec.Command` + stdio継承、`ExitError.ExitCode()` で終了コードを反映。
+Operates as a thin wrapper around the real `terraform` binary.
 
-チェック処理は exec の**前**に行うため、プロセス置換方式でも情報は失われない。
+- Unix: replaces the process via `syscall.Exec`. stdio, TTY detection,
+  signals, and the exit code become identical to the real invocation, with no
+  need for extra signal-forwarding code.
+- Windows: `exec.Command` + inherited stdio, reflecting the exit code via
+  `ExitError.ExitCode()`.
 
-### バイナリ解決
+The lock check runs **before** exec, so no information is lost even with
+process replacement.
 
-- `PARRAFORM_TERRAFORM_BIN` 環境変数を優先。
-- 未設定時はPATH探索。ただし `os.Executable()` と同一絶対パスに解決する
-  エントリは除外する（`terraform` という名前でparraformにシンボリックリンク
-  された場合の無限再帰を防ぐ）。
+### Binary resolution
 
-### plan時のロック回避
+- `PARRAFORM_TERRAFORM_BIN` environment variable takes priority.
+- Otherwise, search `PATH`, excluding any entry that resolves to the same
+  absolute path as `os.Executable()` (to prevent infinite recursion when
+  parraform is symlinked under the name `terraform`).
 
-`TF_CLI_ARGS_plan` 環境変数に `-lock=false` を注入する（既存の値があれば追記）。
-argvの書き換えは不要。
+### Avoiding the lock during plan
 
-検証済みの事実（ローカルbackendで確認）:
+Inject `-lock=false` into the `TF_CLI_ARGS_plan` environment variable
+(appending to any existing value). No argv rewriting needed.
 
-- `TF_CLI_ARGS_plan="-lock=false"` を設定すると、plan はロック未取得で実行できる。
-- ユーザーが明示的にコマンドラインで `-lock=true` / `-lock=false` を渡した場合、
-  env注入より明示フラグが優先される（TF_CLI_ARGS はサブコマンド直後に挿入され、
-  後勝ちのフラグパース規則により明示フラグが勝つ）。
-- `terraform state list` / `terraform show` などの読み取り専用コマンドは
-  もともとロックを取得しない。
+Verified facts (confirmed against the local backend):
 
-対象コマンドは `plan` のみ（`plan -destroy` / `plan -refresh-only` も含む）。
-`apply` / `import` / `refresh` / `state mv` 等、state を書き換えるコマンドは
-一切変更しない完全パススルーとし、terraform標準のロック挙動を維持する。
+- Setting `TF_CLI_ARGS_plan="-lock=false"` lets `plan` run without acquiring
+  the lock.
+- When the user passes `-lock=true` / `-lock=false` explicitly on the command
+  line, the explicit flag takes precedence over the env-injected one
+  (`TF_CLI_ARGS` is inserted right after the subcommand, and last-flag-wins
+  parsing means the explicit flag wins).
+- Read-only commands like `terraform state list` / `terraform show` never
+  acquired the lock to begin with.
 
-### バックエンド対応ロックチェック
+The target command is `plan` only (including `plan -destroy` /
+`plan -refresh-only`). Commands that write state — `apply` / `import` /
+`refresh` / `state mv`, etc. — pass through completely unmodified, preserving
+terraform's standard locking behavior.
 
-`plan` 実行前に、設定されているバックエンドの実ロック状態を読み取り専用（peek）で
-確認し、ロック保持者がいれば警告を表示する。peekは副作用のない読み取りのみで
-完結し、terraform自身のLock/Unlock RPCは一切呼ばない。
+### Backend-aware lock check
 
-バックエンド種別は `.terraform/terraform.tfstate`（`terraform init` 後にキャッシュ
-される backend 設定。type/config属性を平文で含む）をパースして判別する。
-HCLパースは不要。
+Before running `plan`, perform a read-only peek at the configured backend's
+real lock state and print a warning if someone holds it. The peek consists
+solely of side-effect-free reads; it never calls terraform's own Lock/Unlock
+RPC.
 
-**ワークスペース対応が必須**であることを実機検証で確認した。非defaultワーク
-スペースではロック対象のパス/キーがdefaultと異なるため、backend設定だけから
-ロック識別子を組み立てるとdefault以外のワークスペースで誤動作する
-（並列plan/applyがワークスペース単位で走るCIではこれがまさに主要ユース
-ケース）。現在のワークスペースは `TF_WORKSPACE` 環境変数を優先し、なければ
-`.terraform/environment`（defaultの場合はファイル自体が存在しない）を読んで
-判定する。各backendのロック識別子は以下の通りワークスペースを畳み込む
-（実機・公式ドキュメントで確認済み）:
+The backend type is determined by parsing `.terraform/terraform.tfstate` (the
+backend config terraform caches after `init`, containing the type/config
+attributes in plaintext). No HCL parsing needed.
 
-- local: default以外は `<pathのdir>/terraform.tfstate.d/<workspace>/<pathのbasename>`
-- S3: default以外は `<workspace_key_prefix>/<workspace>/<key>`
-  （`workspace_key_prefix` のデフォルトは `env:`）
-- GCS: `<prefix>/<workspace>.tflock`。**defaultも特別扱いされず**
-  `<prefix>/default.tflock` になる（terraform本体のソース
-  `internal/backend/remote-state/gcs/backend_state.go` の `stateFile`/
-  `lockFile` を確認済み。S3/localとは違いdefaultの特別扱いがない点に注意）。
-- azurerm: default以外は `<key>` に `"env:" + workspace` を**区切り文字なしで
-  文字列連結**する（terraform本体のソース `internal/backend/remote-state/azure/
-  backend_state.go` の `Backend.path()` を確認済み。他backendの `/` 区切りとは
-  異なる独特な命名）。ロックはstate blob自体のリース（別オブジェクトではない）
-  で行われ、ロック情報（Who等）はblob本体ではなく `terraformlockid` という
-  blobメタデータキーにbase64+JSONで格納される（`client.go` のLock()実装を
-  確認済み）。
-- consul: default以外は `<path>` に `"-env:" + workspace` を区切り文字なしで
-  連結（`backend_state.go` の `statePath()` を確認済み）。ロック情報は
-  `<path>/.lockinfo` という別KVキーに書き込まれ、Unlock()で明示的に削除される
-  （`client.go` を確認済み）ため、このキーの存在確認だけでロック状態を正確に
-  判定できる（Consulセッションの検査は不要）。
-- kubernetes: GCSと同様にdefaultの特別扱いはなく、Lease名は
-  `"lock-tfstate-<workspace>-<secret_suffix>"`（`client.go`の
-  `createSecretName`/`createLeaseName`を確認済み）。ロック中かどうかは
-  Leaseオブジェクトの存在ではなく`Spec.HolderIdentity`が非nilかどうかで
-  判定する必要がある（Unlock()はLeaseを削除せず`HolderIdentity`をnilに
-  戻すだけ、`client.go`のUnlock()実装を確認済み）。
-- pg (Postgres): defaultの特別扱いはなく、`<schema_name>.states`テーブルの
-  `name`カラムに完全一致するworkspace名の行を探し、その行の`id`カラムの値を
-  advisory lockのキーとして使う（`client.go`/`backend_state.go`を確認済み）。
-  ロック保持者情報（Who）はどこにも永続化されずロック取得プロセスの
-  メモリ内にのみ存在する（`client.go`のLock()/Unlock()実装を確認済み）ため、
-  このbackendでは`Info.Who`は常に空になる（意図した挙動）。
-- cos: S3類似で default は `<prefix>/<key>`、それ以外は
-  `<prefix>/<workspace>/<key>`（`backend_state.go`の`stateFile()`を確認済み）。
-  ロックファイルは`stateFile()+".tflock"`（`lockFileSuffix`定数を確認済み）で、
-  COSオブジェクトとして存在確認するだけでよい（Tags APIによる分散ロックは
-  Lock()実行時の競合防止用で、peekには不要）。
-- oci: S3と同じ形で、defaultは`<key>`そのまま、それ以外は
-  `<workspace_key_prefix>/<workspace>/<key>`（デフォルトprefixは
-  `"tf-state-env"`）。ロックファイルは`path(name)+".lock"`（`gh api`で
-  `backend.go`の生ソースを直接確認し、`lockFileSuffix = ".lock"`であることを
-  検証— `.tflock`ではない点に注意。他backendとの類推で書くと間違えるところ
-  だった）。
-- oss: cos/ociと同じ`<prefix>/<key>`系だが、ロック機構自体がS3のDynamoDB
-  相当（別サービスのTableStore、行キー`"LockID"`列＝`"<bucket>/<stateFile>"`）
-  である点が異なる（`client.go`の`lockPath()`/`pkName`を確認済み）。
-  `tablestore_table`が未設定ならterraform自身もロックしないため、その場合は
-  `supported=false`を返す。
+**Workspace-awareness turned out to be mandatory**, confirmed by hands-on
+testing. Non-default workspaces use a different lock path/key than default,
+so building the lock identifier from backend config alone misbehaves for any
+non-default workspace — which is exactly the primary use case for CI running
+parallel plan/apply per workspace. The current workspace is resolved by
+preferring the `TF_WORKSPACE` env var, then falling back to
+`.terraform/environment` (which doesn't exist at all for the default
+workspace). Each backend's lock identifier folds in the workspace as follows
+(confirmed against real runs and official docs):
 
-### 対応バックエンド一覧（remote stateに設定可能な全種別が対象）
+- local: for non-default, `<dir of path>/terraform.tfstate.d/<workspace>/<basename of path>`
+- S3: for non-default, `<workspace_key_prefix>/<workspace>/<key>` (default
+  `workspace_key_prefix` is `env:`)
+- GCS: `<prefix>/<workspace>.tflock`. **The default workspace gets no special
+  case either** — it becomes `<prefix>/default.tflock` (confirmed against
+  terraform's own source, `stateFile`/`lockFile` in
+  `internal/backend/remote-state/gcs/backend_state.go`. Unlike S3/local, note
+  that there's no special-casing of default).
+- azurerm: for non-default, `"env:" + workspace` is **concatenated to `<key>`
+  with no separator** (confirmed against terraform's source, `Backend.path()`
+  in `internal/backend/remote-state/azure/backend_state.go` — a naming scheme
+  distinct from other backends' `/`-separated ones). Locking is done via a
+  lease on the state blob itself (not a separate object), and lock info (Who,
+  etc.) is stored base64+JSON-encoded not in the blob body but in a blob
+  metadata key called `terraformlockid` (confirmed against `client.go`'s
+  `Lock()` implementation).
+- consul: for non-default, `"-env:" + workspace` is concatenated to `<path>`
+  with no separator (confirmed against `statePath()` in
+  `backend_state.go`). Lock info is written to a separate KV key,
+  `<path>/.lockinfo`, and explicitly deleted on `Unlock()` (confirmed against
+  `client.go`), so checking whether this key exists is enough to accurately
+  determine lock state (no need to inspect Consul sessions).
+- kubernetes: like GCS, no special case for default; the Lease name is
+  `"lock-tfstate-<workspace>-<secret_suffix>"` (confirmed against
+  `createSecretName`/`createLeaseName` in `client.go`). Whether it's locked
+  must be determined by whether `Spec.HolderIdentity` is non-nil, not by
+  whether the Lease object exists (`Unlock()` doesn't delete the Lease, it
+  just resets `HolderIdentity` to nil — confirmed against `client.go`'s
+  `Unlock()` implementation).
+- pg (Postgres): no special case for default; it looks up the row in the
+  `<schema_name>.states` table whose `name` column exactly matches the
+  workspace name, and uses that row's `id` column value as the advisory
+  lock's key (confirmed against `client.go`/`backend_state.go`). Lock holder
+  info (Who) is never persisted anywhere — it only exists in the locking
+  process's memory (confirmed against `client.go`'s `Lock()`/`Unlock()`
+  implementation) — so `Info.Who` is always empty for this backend (that's
+  expected, not a bug).
+- cos: S3-like; default is `<prefix>/<key>`, others are
+  `<prefix>/<workspace>/<key>` (confirmed against `stateFile()` in
+  `backend_state.go`). The lock file is `stateFile()+".tflock"` (confirmed
+  against the `lockFileSuffix` constant), and checking its existence as a COS
+  object is all that's needed (the Tags-API-based distributed lock is only
+  for preventing races during `Lock()` itself; irrelevant to a peek).
+- oci: same shape as S3 — default is `<key>` unchanged, others are
+  `<workspace_key_prefix>/<workspace>/<key>` (default prefix is
+  `"tf-state-env"`). The lock file is `path(name)+".lock"` (verified by
+  fetching `backend.go`'s raw source directly via `gh api` and confirming
+  `lockFileSuffix = ".lock"` — note it's *not* `.tflock`; this is a spot
+  where writing it by analogy to the other backends would have gotten it
+  wrong).
+- oss: same `<prefix>/<key>`-family scheme as cos/oci, but the locking
+  mechanism itself differs — it's S3's DynamoDB equivalent (a separate
+  TableStore service, row key `"LockID"` column = `"<bucket>/<stateFile>"`)
+  (confirmed against `lockPath()`/`pkName` in `client.go`). If
+  `tablestore_table` isn't configured, terraform itself never locks either,
+  so in that case it returns `supported=false`.
 
-現在のterraform公式ドキュメントに掲載されているbackend種別は以下の11種類
-（`local`を除く）。**このうち到達可能なもの全てにLockCheckerを実装する**の
-が方針。
+### Supported backends (targeting every type that can be set as remote state)
 
-| Backend | Peek方法 | 必要権限/前提 | 状態 |
+The terraform official docs currently list the following 11 backend types
+(excluding `local`). **The policy is to implement a LockChecker for every one
+that's reachable.**
+
+| Backend | Peek method | Required permission/prerequisite | Status |
 |---|---|---|---|
-| local | state ファイルへの non-blocking flock 試行(即解放) | 不要 | 実装済み |
-| s3 (native lockfile, `use_lockfile`, TF≥1.11) | `<effective key>.tflock` の GetObject | `s3:GetObject` | 実装済み |
-| s3 (legacy, DynamoDB) | `LockID="<bucket>/<effective key>"` で GetItem | `dynamodb:GetItem` | 実装済み |
-| gcs | `<prefix>/<workspace>.tflock` の存在確認(NewReader) | `storage.objects.get` | 実装済み |
-| azurerm | state blob の `x-ms-lease-status` ヘッダ確認(GetBlobProperties) | blob読み取り権限 | 実装済み |
-| remote (`backend "remote"`, TFC/TFE) | `go-tfe` の `Workspaces.Read` で `Locked` | TFEの読み取りトークン(`TF_TOKEN_*`/`token`属性/`credentials.tfrc.json`) | 実装済み(要注意、後述) |
-| cloud (`cloud{}`ブロック、TFC/TFE) | 同上。`workspaces.name`固定のみ対応、`tags`/`project`による動的ワークスペース解決は非対応 | 同上 | 実装済み(範囲限定) |
-| consul | `<path>/.lockinfo` キーへのKV GET(存在確認) | `kv:read` (ACL有効時) | 実装済み |
-| kubernetes | `coordination.k8s.io/v1 Lease` の `holderIdentity` 確認(GET) | leaseへのget権限 | 実装済み |
-| pg (Postgres) | advisory lockへの非ブロッキング試行+即解放(localと同じ手法) | 接続権限のみ | 実装済み(**実DB未検証**) |
-| cos (Tencent Cloud COS) | `<stateFile>.tflock` オブジェクトのGetObject(存在確認) | オブジェクト読み取り権限 | 実装済み |
-| oci (Oracle Cloud Infrastructure) | `<path(workspace)>.lock` オブジェクトのGetObject(存在確認) | オブジェクト読み取り権限 | 実装済み |
-| oss (Alibaba Cloud OSS) | TableStoreの対応行へのGetRow(存在確認)。`tablestore_table`未設定時はterraform自体がロックしないため対応不可 | TableStore読み取り権限 | 実装済み(**実インスタンス未検証**) |
-| http | Peek手段なし(LOCK/UNLOCKのみでpeek用APIがcontractに存在しない) | - | 対応不可(ポータブル動作にフォールバック) |
+| local | Non-blocking flock attempt on the state file (released immediately) | None | Implemented |
+| s3 (native lockfile, `use_lockfile`, TF≥1.11) | GetObject on `<effective key>.tflock` | `s3:GetObject` | Implemented |
+| s3 (legacy, DynamoDB) | GetItem with `LockID="<bucket>/<effective key>"` | `dynamodb:GetItem` | Implemented |
+| gcs | Existence check on `<prefix>/<workspace>.tflock` (NewReader) | `storage.objects.get` | Implemented |
+| azurerm | Check the state blob's `x-ms-lease-status` header (GetBlobProperties) | Blob read permission | Implemented |
+| remote (`backend "remote"`, TFC/TFE) | `go-tfe`'s `Workspaces.Read`, checking `Locked` | TFE read token (`TF_TOKEN_*` / `token` attribute / `credentials.tfrc.json`) | Implemented (caveats below) |
+| cloud (`cloud{}` block, TFC/TFE) | Same as above. Only fixed `workspaces.name` is supported; `tags`/`project`-based dynamic workspace resolution is not | Same as above | Implemented (scope-limited) |
+| consul | KV GET on the `<path>/.lockinfo` key (existence check) | `kv:read` (when ACLs are enabled) | Implemented |
+| kubernetes | Check `coordination.k8s.io/v1 Lease`'s `holderIdentity` (GET) | get permission on the lease | Implemented |
+| pg (Postgres) | Non-blocking attempt + immediate release on the advisory lock (same technique as local) | Connection permission only | Implemented (**not verified against a real DB**) |
+| cos (Tencent Cloud COS) | GetObject on the `<stateFile>.tflock` object (existence check) | Object read permission | Implemented |
+| oci (Oracle Cloud Infrastructure) | GetObject on the `<path(workspace)>.lock` object (existence check) | Object read permission | Implemented |
+| oss (Alibaba Cloud OSS) | GetRow on the corresponding TableStore row (existence check). Unsupported when `tablestore_table` isn't configured, since terraform itself never locks in that case | TableStore read permission | Implemented (**not verified against a real instance**) |
+| http | No way to peek (only LOCK/UNLOCK exist; there's no peek API in the contract) | - | Not supportable (falls back to portable behavior) |
 
-**全11種別（`local`除く）に到達済み**。すべてterraform本体のソース
-（`internal/backend/remote-state/<name>/`配下の`client.go`/`backend.go`/
-`backend_state.go`）を直接参照してロック識別子の組み立て方を確認しており、
-推測で実装したものはない。ただし検証の深さには差があり、3段階の信頼度が
-ある:
+**All 11 types (excluding `local`) have been reached.** Every one was
+implemented by directly reading terraform's own source
+(`client.go`/`backend.go`/`backend_state.go` under
+`internal/backend/remote-state/<name>/`) to confirm how the lock identifier
+is built — none was guessed. That said, the depth of verification varies,
+across three confidence tiers:
 
-1. **ソース確認＋実際のSDK配線を実機/httptestで検証済み**: local, s3, gcs,
-   azurerm, consul, kubernetes, cos, oci。SDKが実際に送信するHTTPリクエスト
-   （パス・エラー型・404判定等）を`httptest`サーバー（kubernetesのみ
-   client-goのfake clientset）に対して動かして確認している。ただし
-   **この検証はテストが直接クライアントを構築している範囲に限られる**。
-   実運用でのクライアント構築処理（`ossClient`/`gcsClientOptions`/
-   `azurermClient`/`cosClient`/`ociClient`等、認証情報からSDKクライアントを
-   組み立てる部分）自体はテストの対象外で、httptestで直接検証してはいない。
-   例えばcosのbucket URL形式（`https://<bucket>.cos.<region>.myqcloud.com`）は
-   `backend.go`のソースで直接確認したが、`accelerate`/カスタム`endpoint`指定時
-   の別URL形式には対応していない（未対応の構成では接続エラーとなり
-   `supported=false`にフォールバックするため、誤ったエンドポイントに接続する
-   心配はない）。
-2. **ソース確認のみ、実DB/実インスタンス統合テストは未実施**: pg, oss。
-   pgはPostgresのワイヤプロトコルが、ossが使うTableStoreはprotobufベースの
-   プロトコルが、httptestで手軽に模擬できない。この環境ではdocker/実DBへの
-   アクセスも得られなかった。純粋なロジック（識別子組み立て等）のみ単体
-   テスト済み。実環境で検証できる機会があれば優先的に再確認すべき。
-3. **ソース確認＋実機/httptest検証済みだが範囲を限定**: remote/cloud
-   （TFC/TFE）。`workspaces`ネストブロックがキャッシュJSON内でどの形
-   （単一map / 要素数1のlist）で表現されるかは実際のTFC/TFEアカウントで
-   検証できておらず、抽出コードは両方の形を試して想定外なら安全に
-   `supported=false`へフォールバックする。`cloud{}`の`tags`/`project`による
-   動的ワークスペース解決も非対応（`workspaces.name`固定のみ）。
+1. **Source-confirmed, and the actual SDK wiring verified live/via
+   httptest**: local, s3, gcs, azurerm, consul, kubernetes, cos, oci. The
+   HTTP requests the SDK actually sends (path, error type, 404 handling,
+   etc.) were confirmed by exercising them against an `httptest` server
+   (client-go's fake clientset for kubernetes only). That said, **this
+   verification is limited to the scope the tests directly exercise the
+   client in**. The actual client-construction code used in production
+   (`ossClient` / `gcsClientOptions` / `azurermClient` / `cosClient` /
+   `ociClient`, etc. — the part that builds an SDK client from credentials)
+   is itself outside test coverage and wasn't directly verified via
+   httptest. For example, cos's bucket URL format
+   (`https://<bucket>.cos.<region>.myqcloud.com`) was confirmed directly
+   against `backend.go`'s source, but the alternate URL format used with
+   `accelerate` / a custom `endpoint` isn't handled (an unsupported
+   configuration results in a connection error, falling back to
+   `supported=false` — so there's no risk of connecting to the wrong
+   endpoint).
+2. **Source-confirmed only; no integration test against a real DB/instance
+   yet**: pg, oss. Postgres's wire protocol (for pg) and the protobuf-based
+   protocol TableStore (used by oss) uses aren't easily mocked with
+   httptest. Docker/real-DB access wasn't available in this environment
+   either. Only the pure logic (identifier construction, etc.) is unit
+   tested. This should be re-verified against a real environment when one
+   becomes available.
+3. **Source-confirmed and live/httptest-verified, but with a narrowed
+   scope**: remote/cloud (TFC/TFE). Exactly which shape (a single object vs.
+   a one-element list) the `workspaces` nested block takes in the cached
+   JSON hasn't been confirmed against a real TFC/TFE account; the extraction
+   code tries both shapes and safely falls back to `supported=false` on
+   anything unexpected. `cloud{}`'s `tags`/`project`-based dynamic workspace
+   resolution is also unsupported (only fixed `workspaces.name` is).
 
-いずれの場合も、確信が持てない箇所は「間違ったロック識別子で自信満々に
-警告を出す/出さない」ことを避け、`supported=false`で安全側にフォールバック
-する設計を徹底している（ワークスペース対応漏れのバグを一度踏んだ際の教訓）。
+In every case, wherever confidence is lacking, the design consistently
+avoids "confidently printing a warning or not printing one with the wrong
+lock identifier" by falling back safely to `supported=false` (a lesson
+learned from having actually hit the workspace-support bug once).
 
-`LockChecker` インターフェースで抽象化し、バックエンドごとに実装を追加。
-各SDKの依存分離は行わず、**単一バイナリに全部同梱**する方針で決定済み
-（ビルド・配布のシンプルさを優先。バイナリサイズ・ビルド時間の増加は許容）。
+Abstracted behind the `LockChecker` interface, with implementations added per
+backend. The decision was made **not** to isolate each SDK's dependencies,
+and instead **bundle everything into a single binary** (prioritizing build
+and distribution simplicity; the resulting increase in binary size/build
+time is accepted).
 
-### 利用ライブラリの検討
+### Libraries considered
 
-terraformを直接操作する既存ライブラリの採用可否を検討した結果:
+Results of evaluating existing libraries that operate on terraform directly:
 
-- **`hashicorp/terraform-exec`**: 不採用。サブコマンドごとに型付きAPIを持つため
-  「terraformの将来のフラグも含めて全部素通しする」という要件と相性が悪く、
-  tfexec自身がterraformの新フラグに追従するまで使えなくなる。対話的な承認
-  プロンプトのTTY継承も `syscall.Exec` によるプロセス置換ほどの等価性は
-  保証されない。execレイヤーは自前の薄いラッパーのままとする。
-- **`hashicorp/hcl` / `hcl/v2`**: 不採用。backend設定ブロックはinterpolationを
-  許さない（静的値のみ）ため、`terraform init` 後に `.terraform/terraform.tfstate`
-  へ平文キャッシュされる値で判別できる。HCLパーサは不要で `encoding/json` で
-  十分。
-- **`hashicorp/hc-install`**: 不採用。バージョン管理/ダウンロード用ライブラリで
-  あり、今回は「既にPATHにあるterraformに委譲する」だけなのでスコープ外。
-- **terraform本体の内部ロック実装**（`internal/backend/remote-state/*`）:
-  Goの `internal/` 可視性制限で外部からimport不可。S3/GCS/Azureのpeekは
-  各クラウドSDK（`aws-sdk-go-v2` のs3/dynamodbクライアント、
-  `cloud.google.com/go/storage`、`azure-sdk-for-go`）を直接叩いて自前実装する
-  しかない。
-- **`hashicorp/go-tfe`**: 採用。Terraform Cloud/Enterpriseをbackendに使う場合、
-  `Workspaces.Read` 一発でロック状態（`Locked`/`LockedBy`）が取得できるため、
-  他クラウドバックエンドより実装コストが低い。
+- **`hashicorp/terraform-exec`**: Rejected. It has a typed API per
+  subcommand, which clashes with the requirement to "pass through
+  everything, including terraform's future flags" — tfexec itself would need
+  to catch up with terraform's new flags before they could be used. TTY
+  inheritance for the interactive approval prompt also isn't guaranteed to
+  be as faithful as process replacement via `syscall.Exec`. The exec layer
+  stays its own thin, custom wrapper.
+- **`hashicorp/hcl` / `hcl/v2`**: Rejected. Backend config blocks don't allow
+  interpolation (static values only), so the value cached in plaintext to
+  `.terraform/terraform.tfstate` after `terraform init` is enough to
+  determine it. No HCL parser needed — `encoding/json` suffices.
+- **`hashicorp/hc-install`**: Rejected. It's a version-management/download
+  library; this project only delegates to whatever terraform is already on
+  `PATH`, so that's out of scope.
+- **terraform's own internal lock implementation**
+  (`internal/backend/remote-state/*`): Can't be imported externally due to
+  Go's `internal/` visibility rules. The only option for S3/GCS/Azure peeks
+  is to hit each cloud SDK directly (`aws-sdk-go-v2`'s s3/dynamodb clients,
+  `cloud.google.com/go/storage`, `azure-sdk-for-go`) and implement it
+  ourselves.
+- **`hashicorp/go-tfe`**: Adopted. When Terraform Cloud/Enterprise is the
+  backend, lock state (`Locked`/`LockedBy`) can be fetched with a single
+  `Workspaces.Read` call, making it cheaper to implement than the other
+  cloud backends.
 
-バックエンドごとに異なるクラウドSDKへの依存が増える点は将来的な懸念事項。
-使わないバックエンドのSDKまでバイナリに含めたくない場合はbuild tagでの
-分離を検討する（未決定）。
+Growing dependence on different cloud SDKs per backend is a future concern.
+Isolating unused backends' SDKs from the binary via build tags, if desired,
+is left undecided.
 
-**ロック検出時の挙動**: デフォルトは「警告表示して続行」。plan自体は
-`-lock=false` のまま実行する（ここでブロックすると並列plan問題を別の形で
-再現してしまうため）。fail-fastにする `-lock-check=strict` 等のオプションは
-将来の拡張候補とし、初期実装のスコープには含めない。
+**Behavior on detecting a lock**: the default is "print a warning and
+proceed." `plan` still runs with `-lock=false` (blocking here would just
+reproduce the parallel-plan problem in a different form). A fail-fast option
+like `-lock-check=strict` is a candidate for future extension, but out of
+scope for the initial implementation.
 
-### cobra / シェル補完
+### cobra / shell completion
 
-ルートコマンドは `DisableFlagParsing: true` とし、完全パススルーを守る。
+The root command uses `DisableFlagParsing: true` to preserve complete
+passthrough.
 
-terraformの主要サブコマンド（`plan` / `apply` / `destroy` / `state` /
-`workspace` / `import` / `refresh` / `console` / `fmt` / `validate` /
-`output` / `show` / `taint` / `untaint` / `force-unlock` / `graph` /
-`providers` / `init` など約25個）をcobraのサブコマンドとして個別に登録し、
-それぞれ `DisableFlagParsing: true` で同一のexecパスに委譲する。これにより
-cobraが生成する補完スクリプトが実際にterraformコマンド名を補完するようになる。
-`version` もterraform本来のコマンドとして一覧に含め、そのままterraformへ
-パススルーする（`terraform version` の透過性を壊さないよう、parraform自身の
-バージョン表示に `version` サブコマンドを流用しない。parraform自身のバージョン
-確認手段は未実装・スコープ外）。`completion` はterraformに存在しないコマンド名
-なので衝突せず、cobraの標準実装をそのまま使う。
+terraform's main subcommands (roughly 25 of them — `plan` / `apply` /
+`destroy` / `state` / `workspace` / `import` / `refresh` / `console` / `fmt`
+/ `validate` / `output` / `show` / `taint` / `untaint` / `force-unlock` /
+`graph` / `providers` / `init`, etc.) are each registered as individual
+cobra subcommands, each with `DisableFlagParsing: true`, delegating to the
+same exec path. This makes cobra's generated completion script actually
+complete real terraform command names. `version` is included in the list as
+a genuine terraform command too, and passed straight through to terraform
+(so as not to break the transparency of `terraform version` — parraform's
+own version display doesn't hijack the `version` subcommand; parraform's own
+version-check mechanism is unimplemented and out of scope). `completion`
+doesn't collide with any terraform command name, so cobra's standard
+implementation is used as-is.
 
-terraformのバージョンアップでサブコマンドが増減した場合、この一覧を追従させる
-保守コストが発生する点は許容する。
+The maintenance cost of keeping this list current as terraform adds/removes
+subcommands across versions is accepted.
 
-### 安全性の論拠
+### Safety argument
 
-`-lock=false` でのplanが安全な理由: S3/GCSへの書き込みはアトミックで
-read-after-write一貫性があるため、apply中のplanが「壊れた」状態を読む
-（torn read）ことはない。最悪でも「apply完了直前のスナップショットを読む」
-だけであり、破損は起きない。バックエンドロックのpeekはこれに加えて
-「apply進行中である」ことを利用者に知らせるための追加シグナル。
+Why `-lock=false` is safe for `plan`: writes to S3/GCS are atomic and
+read-after-write consistent, so a `plan` running during an `apply` can never
+read a "torn" state. At worst it reads a snapshot from just before the
+`apply` completed — no corruption. The backend lock peek adds one more
+signal on top of that: letting the user know an `apply` is in flight.
 
-**実機検証済み**: `plan -out=` で保存したplanファイルは、保存後に別の操作
-（`taint` 等、設定変更を伴わない操作でも可）でstateのserialが進むと、
-`apply <planfile>` 実行時に `Error: Saved plan is stale` で明示的に失敗する
-ことを確認した。すなわち「CIでplanを保存し、別ジョブでapplyする」という
-典型的なワークフローにおいても、unlocked planが多少古いstateを読んでいた
-場合はapply時にfail-closedし、古い前提でのapplyが誤って実行されることは
-ない。これにより安全性の主張は「破損しない」に加えて「stale planはapply時
-に確実に弾かれる」まで含めて成立する。
+**Verified empirically**: a plan file saved via `plan -out=` fails explicitly
+with `Error: Saved plan is stale` when `apply <planfile>` is run after the
+state's serial has advanced due to some other operation since the plan was
+saved (confirmed this holds even for an operation with no config change,
+like `taint`). In other words, even in the typical CI workflow of "save a
+plan in one job, apply it in another," if the unlocked plan read a somewhat
+stale state, it fails closed at apply time — an apply is never mistakenly
+run against stale assumptions. This lets the safety claim extend beyond "no
+corruption" to "a stale plan is reliably rejected at apply time."
 
-## テスト方針
+## Testing approach
 
-- ロック回避・パススルー判定などの純粋関数はterraform非依存でtable-driven test。
-- passthrough・終了コード・シグナル系はPATH上にargvをechoして終了コードを返す
-  フェイクスクリプトを置いてテストし、実terraformやクラウド認証情報を不要にする。
+- Pure functions like lock avoidance / passthrough classification are
+  table-driven tested independent of terraform.
+- Passthrough, exit codes, and signal handling are tested with a fake script
+  on `PATH` that echoes argv and returns the requested exit code, requiring
+  neither real terraform nor cloud credentials.
 
-## 実装済みの既知の制約
+## Known limitations in the current implementation
 
-- ロックpeekのタイムアウトはデフォルト3秒（`PARRAFORM_LOCK_CHECK_TIMEOUT`で
-  変更可、0以下で無効化）。この待ち時間は**毎回のplan実行に確実に加算される
-  レイテンシ**であり、クラウドSDKのデフォルト認証チェーン解決（IMDSプローブの
-  リトライ、`DefaultAzureCredential`のフォールバック探索等）がこれを超えると
-  peekはエラー扱いになり、警告は出ない。タイムアウトと「未ロック」はユーザー
-  から見て区別できない（意図的なトレードオフ。速度を優先し、peek失敗時に
-  余計なノイズを出さない設計を維持するため、明示的にこの形で決定した）。
-  **`ctx`を渡すだけでは不十分な場合があることを実装時に確認した**:
-  `go-tfe`の`NewClient`はクライアント構築時に`ctx`を受け取らない同期的な
-  `GET /api/v2/ping`をリトライ付きで実行し（TFC/TFEホストが遅い/到達不能だと
-  ここで詰まる）、ossが使う`tablestore.GetRow`もctxを引数に取らない古い
-  シグネチャである。`checker.Peek`内部で`ctx`を無視されても確実にタイムアウト
-  させるため、`cmd/parraform/main.go`の`peekWithTimeout`は`Peek`を
-  goroutineで実行し`select`で競わせる方式にしている。タイムアウトした
-  goroutineは回収せず放置する（直後に`syscall.Exec`でプロセスイメージが
-  丸ごと置き換わるため、リークとして残る心配がない）。
-- azurermのpeekは `access_key`（共有キー）か、なければAzure SDKの
-  `DefaultAzureCredential`（Azure CLIログイン/環境変数/MSI等）のみ対応。
-  `client_secret`/OIDC/サービスプリンシパル証明書などterraform本体が
-  対応する認証方式の大半はMVPの対象外（該当構成ではAzure SDK側の
-  `azidentity` オプションを追加実装する必要がある）。
-- cosのpeekは`secret_id`/`secret_key`（`TENCENTCLOUD_SECRET_ID`/
-  `TENCENTCLOUD_SECRET_KEY`環境変数フォールバック込み）のみ対応。
-  `assume_role`によるロール引き受けは未対応。
-- ociのpeekは`tenancy_ocid`/`user_ocid`/`fingerprint`/`private_key`が
-  揃っている場合のみ直接認証し、なければSDKの`~/.oci/config`
-  （`config_file_profile`、デフォルト`DEFAULT`）にフォールバックする。
-  Instance Principal / Resource Principal / Security Token認証はMVP対象外。
-- ossのpeekは`access_key`/`secret_key`（`ALICLOUD_ACCESS_KEY`/
-  `ALICLOUD_SECRET_KEY`環境変数フォールバック込み）のみ対応。STSトークンや
-  ECSロールによる認証は未対応。
-- pgのpeekは**実際のPostgresサーバーに対して未検証**。HTTPベースの他backend
-  と違いワイヤプロトコルがhttptestで手軽に模擬できず、統合テスト用の
-  Docker/実DBへのアクセスもこの環境では得られなかった。実装はterraform本体の
-  ソース確認に基づく高い確度はあるが、`pgQuoteIdent`等の純粋なロジックのみ
-  単体テスト済みで、実際のSQL発行・セッション固定・エラー処理は未検証。
-  実DBで検証できる環境があれば優先的に再確認すべき。
-- consulのpeekは `address`/`scheme`/`datacenter`/`access_token` のみ対応。
-  `ca_file`/`cert_file`/`key_file`（mTLS）は未対応（該当構成では
-  `consulapi.Config` にTLS設定を追加実装する必要がある）。
-- kubernetesのpeekは `in_cluster_config` / `config_path` /
-  `config_context` のみ対応。`host`+トークン単体指定や、クラウド各社の
-  exec形式認証プラグイン（`aws eks get-token`等）はMVPの対象外。
-- S3のpeekで `s3:GetObject` はあるが `s3:ListBucket` がないIAMロールの場合、
-  存在しない `.tflock` オブジェクトへのGetObjectは `NoSuchKey` ではなく
-  `403 AccessDenied` になりうる。この場合 `isNotFound` が false を返して
-  `Peek` はエラーを返し、`warnIfLocked` は黙ってチェックをスキップする
-  （「未ロック」と「判定不能」が区別できない）。fail-silent設計とは
-  整合するが、既知の限界として明記しておく。
-- S3バックエンドのpeekはbucket/key/region/profile/dynamodb_table/use_lockfile
-  のみに対応。カスタムS3互換エンドポイント（LocalStack/MinIO等）や
-  `assume_role`によるAWSクレデンシャル取得はMVPの対象外（`config.LoadDefaultConfig`
-  のデフォルトチェーンに委ねる）。該当する構成では `s3.NewFromConfig`
-  やSTS AssumeRoleへの対応を別途追加する必要がある。
-- CI環境側が既に `TF_CLI_ARGS_plan="-lock=true"` のように設定している場合、
-  parraformが末尾に追記する `-lock=false` が最後勝ちルールで優先され、
-  parraformの意図（ロック未取得での実行）が黙って勝つ。これはツールの目的
-  上妥当な挙動だが、コマンドラインでの明示指定が優先されるのとは逆方向
-  なので明記しておく。
+- The lock peek's timeout defaults to 3 seconds (configurable via
+  `PARRAFORM_LOCK_CHECK_TIMEOUT`, disabled at `0` or below). This wait is
+  **latency added to every single `plan` invocation** — if a cloud SDK's
+  default credential-chain resolution (IMDS probe retries,
+  `DefaultAzureCredential`'s fallback search, etc.) exceeds it, the peek is
+  treated as an error and no warning is shown. A timeout and "unlocked" are
+  indistinguishable to the user (a deliberate trade-off: this shape was
+  chosen explicitly to prioritize speed and avoid extra noise on peek
+  failure). **Implementation surfaced that passing `ctx` alone isn't always
+  enough**: `go-tfe`'s `NewClient` makes a synchronous, ctx-less
+  `GET /api/v2/ping` with retries at construction time (which stalls here if
+  the TFC/TFE host is slow or unreachable), and oss's `tablestore.GetRow`
+  also has an old signature that takes no ctx argument. To guarantee a
+  timeout even when `ctx` is ignored inside `checker.Peek`,
+  `peekWithTimeout` in `cmd/parraform/main.go` runs `Peek` in a goroutine and
+  races it via `select`. A goroutine that times out is abandoned rather than
+  collected (immediately afterward, `syscall.Exec` replaces the entire
+  process image, so there's no risk of it lingering as a leak).
+- azurerm's peek only supports `access_key` (shared key), or otherwise the
+  Azure SDK's `DefaultAzureCredential` (Azure CLI login / env vars / MSI,
+  etc.). Most of the auth methods terraform itself supports —
+  `client_secret` / OIDC / service principal certificates — are out of MVP
+  scope (adding `azidentity` options on the Azure SDK side would be needed
+  for those configurations).
+- cos's peek only supports `secret_id`/`secret_key` (including
+  `TENCENTCLOUD_SECRET_ID`/`TENCENTCLOUD_SECRET_KEY` env var fallback).
+  `assume_role`-based role assumption isn't supported.
+- oci's peek authenticates directly only when
+  `tenancy_ocid`/`user_ocid`/`fingerprint`/`private_key` are all present,
+  otherwise falling back to the SDK's `~/.oci/config`
+  (`config_file_profile`, default `DEFAULT`). Instance Principal / Resource
+  Principal / Security Token auth is out of MVP scope.
+- oss's peek only supports `access_key`/`secret_key` (including
+  `ALICLOUD_ACCESS_KEY`/`ALICLOUD_SECRET_KEY` env var fallback). STS tokens
+  and ECS-role-based auth aren't supported.
+- pg's peek is **unverified against an actual Postgres server**. Unlike the
+  other HTTP-based backends, its wire protocol isn't easily mocked with
+  httptest, and Docker/real-DB access for integration testing wasn't
+  available in this environment either. The implementation carries high
+  confidence from having read terraform's own source, but only the pure
+  logic (e.g. `pgQuoteIdent`) is unit tested — the actual SQL issuance,
+  session pinning, and error handling are unverified. Should be re-checked
+  as a priority wherever a real DB is available.
+- consul's peek only supports `address`/`scheme`/`datacenter`/
+  `access_token`. `ca_file`/`cert_file`/`key_file` (mTLS) aren't supported
+  (that configuration would need TLS settings added to `consulapi.Config`).
+- kubernetes's peek only supports `in_cluster_config` / `config_path` /
+  `config_context`. Standalone `host`+token auth, and each cloud provider's
+  exec-style auth plugins (e.g. `aws eks get-token`), are out of MVP scope.
+- For an IAM role that has `s3:GetObject` but not `s3:ListBucket`, S3's peek
+  GetObject on a nonexistent `.tflock` object can come back as
+  `403 AccessDenied` instead of `NoSuchKey`. In that case `isNotFound`
+  returns false, `Peek` returns an error, and `warnIfLocked` silently skips
+  the check ("unlocked" and "couldn't tell" become indistinguishable). This
+  is consistent with the fail-silent design, but is worth spelling out as a
+  known limitation.
+- The S3 backend's peek only supports bucket/key/region/profile/
+  dynamodb_table/use_lockfile. A custom S3-compatible endpoint
+  (LocalStack/MinIO, etc.) or obtaining AWS credentials via `assume_role` is
+  out of MVP scope (deferred to `config.LoadDefaultConfig`'s default chain).
+  Supporting those configurations would require separately adding support
+  for `s3.NewFromConfig` options and STS AssumeRole.
+- If the CI environment has already set
+  `TF_CLI_ARGS_plan="-lock=true"`, the `-lock=false` parraform appends wins
+  under the last-flag-wins rule, and parraform's intent (running without
+  acquiring the lock) silently prevails. This is reasonable given the tool's
+  purpose, but it's worth noting that it's the opposite direction from an
+  explicit command-line flag taking precedence.
+- With an implicit default local backend (no `backend {}` block declared at
+  all), `terraform init` doesn't write out the
+  `.terraform/terraform.tfstate` cache file at all (confirmed by hands-on
+  testing). In this case, `backendcfg.Discover` returns `(nil, nil)` and the
+  lock check is silently skipped (treated the same as falling back to
+  portable behavior). When `backend "local" {}` is declared explicitly, the
+  cache is written and the check works correctly. S3/GCS and other
+  non-local backends have no implicit default, so they're unaffected by
+  this limitation.
 
-- `backend {}` ブロックを省略した暗黙のデフォルトlocalバックエンドの場合、
-  `terraform init` は `.terraform/terraform.tfstate` キャッシュファイル自体を
-  書き出さない（実機確認済み）。この場合 `backendcfg.Discover` は `(nil, nil)`
-  を返し、ロックチェックは黙ってスキップされる（ポータブル動作にフォール
-  バックするのと同じ扱い）。`backend "local" {}` を明示している場合は
-  キャッシュが書かれ、チェックは正しく機能する。S3/GCS等の非localバックエンド
-  は暗黙のデフォルトが存在しないため、この制約の影響を受けない。
+## Out of scope (explicitly excluded items)
 
-## スコープ外（明示的に対象外とした項目）
-
-- `apply` への `-lock-timeout` デフォルト注入などの隣接機能。
-- ロック検出時にブロック/待機するstrictモードの実装（インターフェースは
-  拡張余地を残すのみ）。
-- OpenTofu (`tofu`) 対応可否は未決定（バイナリ解決部分のみに影響する小さな決定）。
+- Adjacent features like injecting a default `-lock-timeout` into `apply`.
+- Implementing a strict mode that blocks/waits on lock detection (the
+  interface only leaves room for future extension).
+- Whether to support OpenTofu (`tofu`) is undecided (a small decision that
+  only affects the binary-resolution part).

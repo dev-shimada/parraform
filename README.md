@@ -1,22 +1,25 @@
 # parraform
 
-`terraform` コマンドへの透過ラッパー。`plan` はロックを取得せずに実行し、CIなどで
-並列に走る `plan` 同士がロックを取り合って失敗する問題を解消する。`apply` を
-含むそれ以外のコマンドは通常通り動作し、排他制御を維持する。
+A transparent wrapper around the `terraform` CLI. `plan` runs without acquiring
+the state lock, eliminating the failures that happen when parallel `plan` runs
+in CI fight over it. Every other command, including `apply`, behaves exactly
+like normal terraform and keeps the usual locking in place.
 
-## インストール
+*(日本語版は[こちら](./README.ja.md))*
+
+## Install
 
 ```
 go install github.com/dev-shimada/parraform/cmd/parraform@latest
 ```
 
-terraform実行バイナリはPATHから自動的に見つける。別の場所にあるterraformを
-使いたい場合は `PARRAFORM_TERRAFORM_BIN` で指定する。
+parraform finds the real `terraform` binary on `PATH` automatically. To point
+it at a specific binary instead, set `PARRAFORM_TERRAFORM_BIN`.
 
-## 使い方
+## Usage
 
-`terraform` の代わりに `parraform` を呼ぶだけでよい。サブコマンド・フラグは
-すべてそのままterraformに渡される。
+Just call `parraform` instead of `terraform`. Every subcommand and flag is
+passed through unchanged.
 
 ```
 parraform init
@@ -24,82 +27,86 @@ parraform plan -out=tfplan
 parraform apply tfplan
 ```
 
-CIでは `terraform` という名前でPATHに置いてしまう運用も可能（既存のCI設定を
-変えずに導入できる）。
+You can also drop it onto `PATH` under the name `terraform` in CI, so existing
+pipelines pick it up without any config changes.
 
-### シェル補完
+### Shell completion
 
-cobraベースなので bash/zsh/fish/powershell の補完スクリプトを生成できる。
+Being cobra-based, it can generate completion scripts for bash/zsh/fish/powershell.
 
 ```
 parraform completion bash > /etc/bash_completion.d/parraform
 ```
 
-## 何をしているか
+## What it does
 
-- `plan` 実行時のみ `TF_CLI_ARGS_plan` に `-lock=false` を追加し、ロックを
-  取得せずに実行する。ユーザーが明示的に `-lock=true`/`-lock=false` を
-  コマンドラインで指定した場合はそちらが優先される。
-- `plan` 実行前に、設定されているバックエンドの実ロック状態を読み取り専用で
-  確認し、他プロセスが保持中であれば警告を表示する（`plan`自体は止めない）。
-- `apply` / `import` / `refresh` / `state mv` など、state を書き換える
-  コマンドは一切変更しない完全パススルー。通常通りロックを取得・チェックする。
-- `terraform` の実バイナリへ `syscall.Exec`（Unix）でプロセス置換するため、
-  stdio・TTY判定・シグナル・終了コードは直接terraformを実行した場合と
-  完全に同一。
+- Only for `plan`, it appends `-lock=false` to `TF_CLI_ARGS_plan`, so the run
+  never acquires the lock. An explicit `-lock=true`/`-lock=false` passed on the
+  command line still takes precedence.
+- Before running `plan`, it performs a read-only peek at the configured
+  backend's actual lock state and prints a warning if another process holds
+  it — without ever blocking `plan` itself.
+- `apply` / `import` / `refresh` / `state mv` and every other command that
+  writes state pass through completely unmodified, keeping terraform's normal
+  locking and checks.
+- It replaces the current process with the real `terraform` binary via
+  `syscall.Exec` (Unix), so stdio, TTY detection, signal handling, and the
+  exit code are byte-for-byte identical to running terraform directly.
 
-## なぜ安全か
+## Why it's safe
 
-`-lock=false` でのplanが安全な理由: S3/GCS等への書き込みはアトミックで
-read-after-write一貫性があるため、apply中のplanが「壊れた」状態を読む
-（torn read）ことはない。最悪でも「apply完了直前のスナップショットを読む」
-だけであり、破損は起きない。
+`-lock=false` is safe for `plan` because writes to S3/GCS-style backends are
+atomic and read-after-write consistent, so a `plan` running during an `apply`
+can never read a "torn" state. At worst it reads a snapshot from just before
+the `apply` completed — never a corrupted one.
 
-さらに実機で検証済み: `plan -out=` で保存したplanファイルは、保存後に
-別の操作でstateが変わっていると `apply <planfile>` 実行時に
-`Error: Saved plan is stale` で明示的に失敗する。つまり「CIでplanを保存し、
-別ジョブでapplyする」という典型的なワークフローでも、unlocked planが多少
-古いstateを読んでいた場合はapply時にfail-closedし、古い前提でのapplyが
-誤って実行されることはない。
+Verified empirically: a plan file saved via `plan -out=` fails explicitly with
+`Error: Saved plan is stale` when `apply <planfile>` is later run against a
+state that changed since the plan was captured. So even in the typical CI
+workflow of saving a plan in one job and applying it in another, an unlocked
+plan that read a slightly stale state fails closed at apply time rather than
+silently applying against outdated assumptions.
 
-バックエンドロックのpeekはこれに加えて「apply進行中である」ことを利用者に
-知らせるための追加シグナルであり、`plan`の実行そのものを止めることはない。
+The backend lock peek adds one more signal on top of that — letting you know
+an `apply` is in flight — without ever gating `plan` itself.
 
-## ロックチェックの対象バックエンド
+## Backends the lock check supports
 
-terraformのremote stateとして設定可能な全11種別（`local`除く）にロック
-チェックを実装している。検証の深さには差があり、以下の3段階がある。
+Lock checking is implemented for all 11 backend types terraform currently
+supports for remote state (everything except `local`). The depth of
+verification varies, across three tiers:
 
-| 信頼度 | 内容 | 対象 |
+| Confidence | What it means | Backends |
 |---|---|---|
-| 高 | terraform本体のソースを確認した上で、実際のSDKが送信するHTTPリクエストをhttptest（kubernetesのみclient-goのfake clientset）で検証済み | local, s3, gcs, azurerm, consul, kubernetes, cos, oci |
-| 中 | terraform本体のソースは確認済みだが、実際のDB/インスタンスに対する統合テストは未実施（ワイヤプロトコルがhttptestで模擬しづらいため） | pg, oss |
-| 範囲限定 | ソース確認・実機検証済みだが対応範囲を絞っている | remote / cloud（TFC/TFE。`workspaces.name`固定のみ対応、`tags`/`project`による動的ワークスペース解決は非対応） |
+| High | terraform's source was read to confirm the lock mechanism, and the real SDK's outgoing HTTP requests were verified against `httptest` (client-go's fake clientset for kubernetes) | local, s3, gcs, azurerm, consul, kubernetes, cos, oci |
+| Medium | terraform's source was read, but there's been no integration test against a real DB/instance | pg, oss |
+| Scope-limited | Source-verified and tested, but the supported configuration shapes are narrower | remote / cloud (TFC/TFE — only fixed `workspaces.name` is supported, not the `tags`/`project` dynamic-workspace forms) |
 
-`http` backendはterraform自身のcontractにpeek用のAPIが存在しないため対応
-不可（`-lock=false`のみ適用され、ロックチェックはスキップされる）。
+The `http` backend has no supported way to peek at all, since terraform's own
+contract for it exposes only `LOCK`/`UNLOCK`, not a read-only check (so
+`-lock=false` still applies, but no lock warning is ever shown).
 
-いずれのbackendでも、設定の抽出やロック機構の理解に確信が持てない場合は
-「間違ったロック識別子で誤った警告を出す/出さない」ことを避け、チェックを
-黙ってスキップする（`-lock=false`だけを適用してplanは実行する）設計にして
-いる。
+For every backend, whenever there's doubt about how to extract config or
+interpret the lock mechanism, the checker silently skips the check rather than
+risk a wrong-but-confident answer — `plan` still runs with `-lock=false`.
 
-バックエンドごとの実装詳細・既知の制約（対応している認証方式の範囲など）は
-[DESIGN.md](./DESIGN.md) を参照。
+See [DESIGN.md](./DESIGN.md) for backend-by-backend implementation detail and
+known limitations (including the exact scope of supported auth methods).
 
-## 環境変数
+## Environment variables
 
-| 変数 | 説明 |
+| Variable | Description |
 |---|---|
-| `PARRAFORM_TERRAFORM_BIN` | 使用するterraformバイナリのパスを明示指定する |
-| `PARRAFORM_LOCK_CHECK_TIMEOUT` | ロックpeekのタイムアウト（Goのduration文字列、デフォルト`3s`）。`plan`実行のたびに必ず加算される待ち時間であるため、クラウド認証チェーンの解決が遅い環境では調整するとよい。`0`以下でチェック自体を無効化する |
+| `PARRAFORM_TERRAFORM_BIN` | Explicit path to the terraform binary to use |
+| `PARRAFORM_LOCK_CHECK_TIMEOUT` | Timeout for the lock peek (a Go duration string, default `3s`). This latency is added to every `plan` invocation, so tune it down in environments with slow cloud credential resolution. `0` or negative disables the check entirely |
 
-## 開発
+## Development
 
 ```
 go build ./...
 go test ./...
 ```
 
-設計判断の詳細（各backendのソース検証結果、既知の制約、採用/不採用にした
-ライブラリとその理由など）は [DESIGN.md](./DESIGN.md) にまとめてある。
+Design rationale — per-backend source verification results, known
+limitations, and which libraries were adopted/rejected and why — is in
+[DESIGN.md](./DESIGN.md).
