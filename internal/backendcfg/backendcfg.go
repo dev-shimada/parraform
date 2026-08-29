@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Config describes the resolved backend for the working directory.
@@ -19,6 +20,12 @@ type Config struct {
 	// needed to resolve backend config paths that are relative (e.g. the
 	// local backend's "path").
 	Dir string
+	// Workspace is the currently selected terraform workspace, e.g.
+	// "default" or "staging". Lock checkers must fold this into whatever
+	// state path/key they derive from Config, since non-default
+	// workspaces are stored (and locked) at a different location than the
+	// backend's bare configured path/key.
+	Workspace string
 }
 
 type cacheFile struct {
@@ -51,5 +58,29 @@ func Discover(dir string) (*Config, error) {
 		return nil, nil
 	}
 
-	return &Config{Type: cf.Backend.Type, Config: cf.Backend.Config, Dir: dir}, nil
+	return &Config{
+		Type:      cf.Backend.Type,
+		Config:    cf.Backend.Config,
+		Dir:       dir,
+		Workspace: currentWorkspace(dir),
+	}, nil
+}
+
+// currentWorkspace mirrors terraform's own resolution: TF_WORKSPACE
+// overrides everything, otherwise dir/.terraform/environment holds the
+// selected workspace name, and its absence means "default" (terraform
+// never writes that file for the default workspace).
+func currentWorkspace(dir string) string {
+	if ws := os.Getenv("TF_WORKSPACE"); ws != "" {
+		return ws
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ".terraform", "environment"))
+	if err != nil {
+		return "default"
+	}
+	ws := strings.TrimSpace(string(data))
+	if ws == "" {
+		return "default"
+	}
+	return ws
 }

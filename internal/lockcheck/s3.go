@@ -50,6 +50,9 @@ func (s3Checker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bool, e
 		return Info{}, false, nil
 	}
 
+	prefix, _ := cfg.Config["workspace_key_prefix"].(string)
+	effectiveKey := workspaceObjectKey(key, cfg.Workspace, prefix)
+
 	awsCfg, err := loadAWSConfig(ctx, cfg.Config)
 	if err != nil {
 		return Info{}, false, fmt.Errorf("loading AWS config: %w", err)
@@ -57,11 +60,25 @@ func (s3Checker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bool, e
 
 	if useLockfile {
 		client := s3.NewFromConfig(awsCfg)
-		return peekS3Lockfile(ctx, client, bucket, key)
+		return peekS3Lockfile(ctx, client, bucket, effectiveKey)
 	}
 
 	client := dynamodb.NewFromConfig(awsCfg)
-	return peekDynamoDBLock(ctx, client, table, bucket, key)
+	return peekDynamoDBLock(ctx, client, table, bucket, effectiveKey)
+}
+
+// workspaceObjectKey mirrors the S3 backend's own key derivation: the
+// default workspace uses the configured key unchanged, while any other
+// workspace is stored (and locked) at "<prefix>/<workspace>/<key>", prefix
+// defaulting to "env:".
+func workspaceObjectKey(key, workspace, prefix string) string {
+	if workspace == "" || workspace == "default" {
+		return key
+	}
+	if prefix == "" {
+		prefix = "env:"
+	}
+	return prefix + "/" + workspace + "/" + key
 }
 
 func loadAWSConfig(ctx context.Context, bcfg map[string]any) (aws.Config, error) {
@@ -75,7 +92,7 @@ func loadAWSConfig(ctx context.Context, bcfg map[string]any) (aws.Config, error)
 	return config.LoadDefaultConfig(ctx, opts...)
 }
 
-// s3GetObjectAPI is the slice of *s3.Client used here, so tests can point
+// s3GetObjectAPI is the subset of *s3.Client used here, so tests can point
 // it at a fake server without touching real AWS credentials or endpoints.
 type s3GetObjectAPI interface {
 	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)

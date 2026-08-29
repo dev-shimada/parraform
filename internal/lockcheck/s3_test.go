@@ -13,7 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-func testAWSConfig(endpoint string) aws.Config {
+func testAWSConfig() aws.Config {
 	return aws.Config{
 		Region:      "us-east-1",
 		Credentials: awscreds.NewStaticCredentialsProvider("test", "test", ""),
@@ -28,7 +28,7 @@ func TestPeekS3Lockfile_NotLocked(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := s3.NewFromConfig(testAWSConfig(srv.URL), func(o *s3.Options) {
+	client := s3.NewFromConfig(testAWSConfig(), func(o *s3.Options) {
 		o.BaseEndpoint = aws.String(srv.URL)
 		o.UsePathStyle = true
 	})
@@ -52,7 +52,7 @@ func TestPeekS3Lockfile_Locked(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := s3.NewFromConfig(testAWSConfig(srv.URL), func(o *s3.Options) {
+	client := s3.NewFromConfig(testAWSConfig(), func(o *s3.Options) {
 		o.BaseEndpoint = aws.String(srv.URL)
 		o.UsePathStyle = true
 	})
@@ -79,7 +79,7 @@ func TestPeekDynamoDBLock_NotLocked(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := dynamodb.NewFromConfig(testAWSConfig(srv.URL), func(o *dynamodb.Options) {
+	client := dynamodb.NewFromConfig(testAWSConfig(), func(o *dynamodb.Options) {
 		o.BaseEndpoint = aws.String(srv.URL)
 	})
 
@@ -107,7 +107,7 @@ func TestPeekDynamoDBLock_Locked(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := dynamodb.NewFromConfig(testAWSConfig(srv.URL), func(o *dynamodb.Options) {
+	client := dynamodb.NewFromConfig(testAWSConfig(), func(o *dynamodb.Options) {
 		o.BaseEndpoint = aws.String(srv.URL)
 	})
 
@@ -139,6 +139,28 @@ func TestS3Checker_Peek_NoLockingConfigured(t *testing.T) {
 	}
 	if supported {
 		t.Error("Peek() supported = true, want false (no dynamodb_table or use_lockfile configured)")
+	}
+}
+
+func TestWorkspaceObjectKey(t *testing.T) {
+	cases := []struct {
+		name      string
+		key       string
+		workspace string
+		prefix    string
+		want      string
+	}{
+		{"default workspace unchanged", "path/to/my/key", "default", "", "path/to/my/key"},
+		{"empty workspace treated as default", "path/to/my/key", "", "", "path/to/my/key"},
+		{"non-default workspace default prefix", "path/to/my/key", "development", "", "env:/development/path/to/my/key"},
+		{"non-default workspace custom prefix", "path/to/my/key", "development", "custom-prefix", "custom-prefix/development/path/to/my/key"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := workspaceObjectKey(c.key, c.workspace, c.prefix); got != c.want {
+				t.Errorf("workspaceObjectKey(%q, %q, %q) = %q, want %q", c.key, c.workspace, c.prefix, got, c.want)
+			}
+		})
 	}
 }
 

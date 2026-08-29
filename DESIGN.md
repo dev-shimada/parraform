@@ -64,6 +64,19 @@ argvの書き換えは不要。
 される backend 設定。type/config属性を平文で含む）をパースして判別する。
 HCLパースは不要。
 
+**ワークスペース対応が必須**であることを実機検証で確認した。非defaultワーク
+スペースではロック対象のパス/キーがdefaultと異なるため、backend設定だけから
+ロック識別子を組み立てるとdefault以外のワークスペースで誤動作する
+（並列plan/applyがワークスペース単位で走るCIではこれがまさに主要ユース
+ケース）。現在のワークスペースは `TF_WORKSPACE` 環境変数を優先し、なければ
+`.terraform/environment`（defaultの場合はファイル自体が存在しない）を読んで
+判定する。各backendのロック識別子は以下の通りワークスペースを畳み込む
+（実機・公式ドキュメントで確認済み）:
+
+- local: default以外は `<pathのdir>/terraform.tfstate.d/<workspace>/<pathのbasename>`
+- S3: default以外は `<workspace_key_prefix>/<workspace>/<key>`
+  （`workspace_key_prefix` のデフォルトは `env:`）
+
 | Backend | Peek方法 | 必要権限 |
 |---|---|---|
 | S3 (native lockfile, `use_lockfile`, TF≥1.11) | `<key>.tflock` オブジェクトの HeadObject/GetObject | `s3:GetObject` |
@@ -156,6 +169,12 @@ read-after-write一貫性があるため、apply中のplanが「壊れた」状�
 
 ## 実装済みの既知の制約
 
+- S3のpeekで `s3:GetObject` はあるが `s3:ListBucket` がないIAMロールの場合、
+  存在しない `.tflock` オブジェクトへのGetObjectは `NoSuchKey` ではなく
+  `403 AccessDenied` になりうる。この場合 `isNotFound` が false を返して
+  `Peek` はエラーを返し、`warnIfLocked` は黙ってチェックをスキップする
+  （「未ロック」と「判定不能」が区別できない）。fail-silent設計とは
+  整合するが、既知の限界として明記しておく。
 - S3バックエンドのpeekはbucket/key/region/profile/dynamodb_table/use_lockfile
   のみに対応。カスタムS3互換エンドポイント（LocalStack/MinIO等）や
   `assume_role`によるAWSクレデンシャル取得はMVPの対象外（`config.LoadDefaultConfig`

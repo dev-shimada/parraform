@@ -26,6 +26,7 @@ func (localChecker) Peek(_ context.Context, cfg backendcfg.Config) (Info, bool, 
 	if path == "" {
 		path = "terraform.tfstate"
 	}
+	path = workspaceStatePath(path, cfg.Workspace)
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(cfg.Dir, path)
 	}
@@ -47,4 +48,17 @@ func (localChecker) Peek(_ context.Context, cfg backendcfg.Config) (Info, bool, 
 	}
 	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	return Info{Locked: false}, true, nil
+}
+
+// workspaceStatePath mirrors terraform's local backend: the default
+// workspace stores state at exactly the configured path, while any other
+// workspace stores it under a sibling terraform.tfstate.d/<workspace>/
+// directory, keeping the original path's own base filename.
+func workspaceStatePath(basePath, workspace string) string {
+	if workspace == "" || workspace == "default" {
+		return basePath
+	}
+	dir := filepath.Dir(basePath)
+	base := filepath.Base(basePath)
+	return filepath.Join(dir, "terraform.tfstate.d", workspace, base)
 }
