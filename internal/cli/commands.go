@@ -25,6 +25,12 @@ var terraformCommands = []struct {
 	{"force-unlock", "Release a stuck lock on the current workspace"},
 	{"get", "Install or upgrade remote Terraform modules"},
 	{"graph", "Generate a Graphviz graph of the steps in an operation"},
+	// terraform has no "help" subcommand ("terraform help" prints an error
+	// saying so). Registering it here as an ordinary passthrough entry
+	// preempts cobra's own auto-added "help" command, which would otherwise
+	// intercept it and print cobra's help instead of terraform's real
+	// (error) output.
+	{"help", "(passes through to terraform, which has no \"help\" command)"},
 	{"import", "Associate existing infrastructure with a Terraform resource"},
 	{"login", "Obtain and save credentials for a remote host"},
 	{"logout", "Remove locally-stored credentials for a remote host"},

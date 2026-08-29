@@ -140,6 +140,15 @@ read-after-write一貫性があるため、apply中のplanが「壊れた」状�
 だけであり、破損は起きない。バックエンドロックのpeekはこれに加えて
 「apply進行中である」ことを利用者に知らせるための追加シグナル。
 
+**実機検証済み**: `plan -out=` で保存したplanファイルは、保存後に別の操作
+（`taint` 等、設定変更を伴わない操作でも可）でstateのserialが進むと、
+`apply <planfile>` 実行時に `Error: Saved plan is stale` で明示的に失敗する
+ことを確認した。すなわち「CIでplanを保存し、別ジョブでapplyする」という
+典型的なワークフローにおいても、unlocked planが多少古いstateを読んでいた
+場合はapply時にfail-closedし、古い前提でのapplyが誤って実行されることは
+ない。これにより安全性の主張は「破損しない」に加えて「stale planはapply時
+に確実に弾かれる」まで含めて成立する。
+
 ## テスト方針
 
 - ロック回避・パススルー判定などの純粋関数はterraform非依存でtable-driven test。
@@ -147,6 +156,12 @@ read-after-write一貫性があるため、apply中のplanが「壊れた」状�
   フェイクスクリプトを置いてテストし、実terraformやクラウド認証情報を不要にする。
 
 ## 実装済みの既知の制約
+
+- CI環境側が既に `TF_CLI_ARGS_plan="-lock=true"` のように設定している場合、
+  parraformが末尾に追記する `-lock=false` が最後勝ちルールで優先され、
+  parraformの意図（ロック未取得での実行）が黙って勝つ。これはツールの目的
+  上妥当な挙動だが、コマンドラインでの明示指定が優先されるのとは逆方向
+  なので明記しておく。
 
 - `backend {}` ブロックを省略した暗黙のデフォルトlocalバックエンドの場合、
   `terraform init` は `.terraform/terraform.tfstate` キャッシュファイル自体を
