@@ -87,6 +87,17 @@ HCLパースは不要。
   で行われ、ロック情報（Who等）はblob本体ではなく `terraformlockid` という
   blobメタデータキーにbase64+JSONで格納される（`client.go` のLock()実装を
   確認済み）。
+- consul: default以外は `<path>` に `"-env:" + workspace` を区切り文字なしで
+  連結（`backend_state.go` の `statePath()` を確認済み）。ロック情報は
+  `<path>/.lockinfo` という別KVキーに書き込まれ、Unlock()で明示的に削除される
+  （`client.go` を確認済み）ため、このキーの存在確認だけでロック状態を正確に
+  判定できる（Consulセッションの検査は不要）。
+- kubernetes: GCSと同様にdefaultの特別扱いはなく、Lease名は
+  `"lock-tfstate-<workspace>-<secret_suffix>"`（`client.go`の
+  `createSecretName`/`createLeaseName`を確認済み）。ロック中かどうかは
+  Leaseオブジェクトの存在ではなく`Spec.HolderIdentity`が非nilかどうかで
+  判定する必要がある（Unlock()はLeaseを削除せず`HolderIdentity`をnilに
+  戻すだけ、`client.go`のUnlock()実装を確認済み）。
 
 ### 対応バックエンド一覧（remote stateに設定可能な全種別が対象）
 
@@ -103,8 +114,8 @@ HCLパースは不要。
 | azurerm | state blob の `x-ms-lease-status` ヘッダ確認(GetBlobProperties) | blob読み取り権限 | 実装済み |
 | remote (`backend "remote"`, TFC/TFE) | `go-tfe` の `Workspaces.Read` で `Locked` | TFEの読み取りトークン(`TF_TOKEN_*`/`token`属性/`credentials.tfrc.json`) | 実装済み(要注意、後述) |
 | cloud (`cloud{}`ブロック、TFC/TFE) | 同上。`workspaces.name`固定のみ対応、`tags`/`project`による動的ワークスペース解決は非対応 | 同上 | 実装済み(範囲限定) |
-| consul | KVエントリの `Session` フィールド確認(read-only GET) | `kv:read` (ACL有効時) | 未実装 |
-| kubernetes | `coordination.k8s.io/v1 Lease` の `holderIdentity` 確認(GET) | leaseへのget/list権限 | 未実装 |
+| consul | `<path>/.lockinfo` キーへのKV GET(存在確認) | `kv:read` (ACL有効時) | 実装済み |
+| kubernetes | `coordination.k8s.io/v1 Lease` の `holderIdentity` 確認(GET) | leaseへのget権限 | 実装済み |
 | pg (Postgres) | advisory lockへの非ブロッキング試行+即解放(localと同じ手法) | 接続権限のみ | 未実装 |
 | oss (Alibaba Cloud OSS) | ロック方式を一次情報で確認できず | - | **意図的に未対応**(後述) |
 | cos (Tencent Cloud COS) | ロック方式を一次情報で確認できず | - | **意図的に未対応**(後述) |
@@ -222,6 +233,12 @@ read-after-write一貫性があるため、apply中のplanが「壊れた」状�
   `client_secret`/OIDC/サービスプリンシパル証明書などterraform本体が
   対応する認証方式の大半はMVPの対象外（該当構成ではAzure SDK側の
   `azidentity` オプションを追加実装する必要がある）。
+- consulのpeekは `address`/`scheme`/`datacenter`/`access_token` のみ対応。
+  `ca_file`/`cert_file`/`key_file`（mTLS）は未対応（該当構成では
+  `consulapi.Config` にTLS設定を追加実装する必要がある）。
+- kubernetesのpeekは `in_cluster_config` / `config_path` /
+  `config_context` のみ対応。`host`+トークン単体指定や、クラウド各社の
+  exec形式認証プラグイン（`aws eks get-token`等）はMVPの対象外。
 - S3のpeekで `s3:GetObject` はあるが `s3:ListBucket` がないIAMロールの場合、
   存在しない `.tflock` オブジェクトへのGetObjectは `NoSuchKey` ではなく
   `403 AccessDenied` になりうる。この場合 `isNotFound` が false を返して
