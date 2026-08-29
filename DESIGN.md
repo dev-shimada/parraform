@@ -101,14 +101,33 @@ HCLパースは不要。
 | s3 (legacy, DynamoDB) | `LockID="<bucket>/<effective key>"` で GetItem | `dynamodb:GetItem` | 実装済み |
 | gcs | `<prefix>/<workspace>.tflock` の存在確認(NewReader) | `storage.objects.get` | 実装済み |
 | azurerm | state blob の `x-ms-lease-status` ヘッダ確認(GetBlobProperties) | blob読み取り権限 | 実装済み |
-| remote (`backend "remote"` / `cloud`ブロック、TFC/TFE) | `go-tfe` の `Workspaces.Read` で `Locked`/`LockedBy` | TFEの読み取りトークン(`credentials.tfrc.json`/`TF_TOKEN_*`) | 未実装 |
+| remote (`backend "remote"`, TFC/TFE) | `go-tfe` の `Workspaces.Read` で `Locked` | TFEの読み取りトークン(`TF_TOKEN_*`/`token`属性/`credentials.tfrc.json`) | 実装済み(要注意、後述) |
+| cloud (`cloud{}`ブロック、TFC/TFE) | 同上。`workspaces.name`固定のみ対応、`tags`/`project`による動的ワークスペース解決は非対応 | 同上 | 実装済み(範囲限定) |
 | consul | KVエントリの `Session` フィールド確認(read-only GET) | `kv:read` (ACL有効時) | 未実装 |
 | kubernetes | `coordination.k8s.io/v1 Lease` の `holderIdentity` 確認(GET) | leaseへのget/list権限 | 未実装 |
 | pg (Postgres) | advisory lockへの非ブロッキング試行+即解放(localと同じ手法) | 接続権限のみ | 未実装 |
-| oss (Alibaba Cloud OSS) | S3類似 + Tablestoreでのロック確認 | 要調査 | 未実装 |
-| cos (Tencent Cloud COS) | ロック方式を要調査 | 要調査 | 未実装 |
-| oci (Oracle Cloud Infrastructure) | ロック方式を要調査 | 要調査 | 未実装 |
+| oss (Alibaba Cloud OSS) | ロック方式を一次情報で確認できず | - | **意図的に未対応**(後述) |
+| cos (Tencent Cloud COS) | ロック方式を一次情報で確認できず | - | **意図的に未対応**(後述) |
+| oci (Oracle Cloud Infrastructure) | ロック方式を一次情報で確認できず | - | **意図的に未対応**(後述) |
 | http | Peek手段なし(LOCK/UNLOCKのみでpeek用APIがcontractに存在しない) | - | 対応不可(ポータブル動作にフォールバック) |
+
+**remote/cloudの注意点**: `workspaces` ネストブロックがキャッシュJSON内でどの
+形（単一map / 要素数1のlist）で表現されるかは、実際のTFC/TFEアカウントを
+使ったキャッシュファイルで検証できていない（terraformのschemaソースからの
+推測に留まる）。抽出コードは両方の形を試し、想定外の形なら安全に
+`supported=false`へフォールバックする設計にしてあるため、誤ったロック識別子
+で偽の警告を出す心配はない（最悪ケースはチェックが黙ってスキップされるだけ）。
+TFC/TFEアカウントで実際に検証できる機会があれば要再確認。
+
+**oss/cos/ociを意図的に未対応とした理由**: この3つはS3/GCS/AzureRMのように
+terraform本体のソースを直接参照してロック識別子の組み立て方を検証する
+ところまで到達できておらず、一次情報のない推測でLockCheckerを書くと
+「間違ったロック識別子で自信満々に警告を出す/出さない」という、ワークスペース
+バグで一度踏んだのと同じ失敗を再現しかねない。設定の抽出だけ失敗するのと
+違い、ロック機構そのものの理解が不確実なため、`supported=false`にすらならず
+誤答するリスクがある。よって未登録のまま（`lockcheck.For`が見つからず
+ポータブル動作にフォールバック）とし、一次情報（terraform本体のソース、
+または実際のクラウド環境での検証）にアクセスできた時点で追加する。
 
 `LockChecker` インターフェースで抽象化し、バックエンドごとに実装を追加。
 各SDKの依存分離は行わず、**単一バイナリに全部同梱**する方針で決定済み
@@ -191,6 +210,13 @@ read-after-write一貫性があるため、apply中のplanが「壊れた」状�
 
 ## 実装済みの既知の制約
 
+- ロックpeekのタイムアウトはデフォルト3秒（`PARRAFORM_LOCK_CHECK_TIMEOUT`で
+  変更可、0以下で無効化）。この待ち時間は**毎回のplan実行に確実に加算される
+  レイテンシ**であり、クラウドSDKのデフォルト認証チェーン解決（IMDSプローブの
+  リトライ、`DefaultAzureCredential`のフォールバック探索等）がこれを超えると
+  peekはエラー扱いになり、警告は出ない。タイムアウトと「未ロック」はユーザー
+  から見て区別できない（意図的なトレードオフ。速度を優先し、peek失敗時に
+  余計なノイズを出さない設計を維持するため、明示的にこの形で決定した）。
 - azurermのpeekは `access_key`（共有キー）か、なければAzure SDKの
   `DefaultAzureCredential`（Azure CLIログイン/環境変数/MSI等）のみ対応。
   `client_secret`/OIDC/サービスプリンシパル証明書などterraform本体が

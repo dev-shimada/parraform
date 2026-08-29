@@ -45,11 +45,34 @@ func runTerraform(argv []string) error {
 	return execwrap.Run(bin, append([]string{bin}, argv...), env)
 }
 
+// defaultLockCheckTimeout bounds how long warnIfLocked will wait on a
+// backend peek (credential resolution for a cloud SDK's default chain can
+// itself take seconds, e.g. IMDS probing or DefaultAzureCredential walking
+// its fallback list) before giving up silently. This is real latency added
+// to every "plan" invocation, which cuts against the whole point of this
+// tool, so it's kept short and deliberately tunable via
+// PARRAFORM_LOCK_CHECK_TIMEOUT (a Go duration string; 0 or negative
+// disables the check entirely) rather than hardcoded without an escape
+// hatch.
+const defaultLockCheckTimeout = 3 * time.Second
+
 // warnIfLocked performs a best-effort, read-only peek at the configured
 // backend's lock and prints a warning if it's currently held. It never
 // blocks plan and any failure here is silently ignored: the check is purely
-// informational, not a gate.
+// informational, not a gate. This means a timeout or a peek error is
+// indistinguishable from "unlocked" to the user — an accepted trade-off,
+// see DESIGN.md.
 func warnIfLocked(argv []string) {
+	timeout := defaultLockCheckTimeout
+	if raw := os.Getenv("PARRAFORM_LOCK_CHECK_TIMEOUT"); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil {
+			timeout = d
+		}
+	}
+	if timeout <= 0 {
+		return
+	}
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		return
@@ -74,7 +97,7 @@ func warnIfLocked(argv []string) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	info, supported, err := checker.Peek(ctx, *cfg)
