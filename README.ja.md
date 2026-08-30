@@ -95,9 +95,6 @@ terraformのremote stateとして設定可能な全11種別（`local`除く）�
 黙ってスキップする（`-lock=false`だけを適用してplanは実行する）設計にして
 いる。
 
-バックエンドごとの実装詳細・既知の制約（対応している認証方式の範囲など）は
-[DESIGN.md](./DESIGN.md)（英語）/ [DESIGN.ja.md](./DESIGN.ja.md)（日本語）を参照。
-
 ## 環境変数
 
 | 変数 | 説明 |
@@ -118,7 +115,3 @@ Linux/macOS/Windowsの3プラットフォーム）。リリースは`v*`タグ�
 [GoReleaser](https://goreleaser.com/)がビルドしてGitHub Releasesと
 [homebrew-parraform](https://github.com/dev-shimada/homebrew-parraform)
 tapに公開する。
-
-設計判断の詳細（各backendのソース検証結果、既知の制約、採用/不採用にした
-ライブラリとその理由など）は [DESIGN.md](./DESIGN.md)（英語）/
-[DESIGN.ja.md](./DESIGN.ja.md)（日本語）にまとめてある。

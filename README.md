@@ -99,9 +99,6 @@ For every backend, whenever there's doubt about how to extract config or
 interpret the lock mechanism, the checker silently skips the check rather than
 risk a wrong-but-confident answer — `plan` still runs with `-lock=false`.
 
-See [DESIGN.md](./DESIGN.md) for backend-by-backend implementation detail and
-known limitations (including the exact scope of supported auth methods).
-
 ## Environment variables
 
 | Variable | Description |
@@ -122,7 +119,3 @@ on every push and pull request; releases are cut by pushing a `v*` tag,
 which [GoReleaser](https://goreleaser.com/) builds and publishes to GitHub
 Releases and the [homebrew-parraform](https://github.com/dev-shimada/homebrew-parraform)
 tap.
-
-Design rationale — per-backend source verification results, known
-limitations, and which libraries were adopted/rejected and why — is in
-[DESIGN.md](./DESIGN.md).
