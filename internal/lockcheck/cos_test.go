@@ -45,7 +45,7 @@ func TestCOSLockObjectKey(t *testing.T) {
 func TestPeekCOSLockObject_NotLocked(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message></Error>`)
+		_, _ = fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message></Error>`)
 	}))
 	defer srv.Close()
 
@@ -65,7 +65,7 @@ func TestPeekCOSLockObject_NotLocked(t *testing.T) {
 func TestPeekCOSLockObject_Locked(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"ID":"abc-123","Who":"runner@github-actions"}`)
+		_, _ = fmt.Fprint(w, `{"ID":"abc-123","Who":"runner@github-actions"}`)
 	}))
 	defer srv.Close()
 

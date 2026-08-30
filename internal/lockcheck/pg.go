@@ -63,7 +63,7 @@ func (pgChecker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bool, e
 	if err != nil {
 		return Info{}, false, fmt.Errorf("opening postgres connection: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	return peekPgAdvisoryLock(ctx, db, schema, workspace)
 }
@@ -106,7 +106,7 @@ func peekPgAdvisoryLock(ctx context.Context, db *sql.DB, schema, workspace strin
 	if err != nil {
 		return Info{}, false, err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	query := fmt.Sprintf(`SELECT id FROM %s.states WHERE name = $1`, pgQuoteIdent(schema))
 	var id int64

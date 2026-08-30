@@ -15,7 +15,7 @@ func testTFEWorkspaces(t *testing.T, locked bool) tfeWorkspaceReader {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/vnd.api+json")
 		w.WriteHeader(200)
-		fmt.Fprintf(w, `{"data":{"id":"ws-abc123","type":"workspaces","attributes":{"name":"prod","locked":%v}}}`, locked)
+		_, _ = fmt.Fprintf(w, `{"data":{"id":"ws-abc123","type":"workspaces","attributes":{"name":"prod","locked":%v}}}`, locked)
 	}))
 	t.Cleanup(srv.Close)
 

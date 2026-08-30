@@ -23,7 +23,7 @@ func testAWSConfig() aws.Config {
 func TestPeekS3Lockfile_NotLocked(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>
+		_, _ = fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>
 <Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message><Key>envs/prod/terraform.tfstate.tflock</Key><RequestId>x</RequestId><HostId>x</HostId></Error>`)
 	}))
 	defer srv.Close()
@@ -48,7 +48,7 @@ func TestPeekS3Lockfile_NotLocked(t *testing.T) {
 func TestPeekS3Lockfile_Locked(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"ID":"abc-123","Who":"runner@github-actions","Version":"1.15.8"}`)
+		_, _ = fmt.Fprint(w, `{"ID":"abc-123","Who":"runner@github-actions","Version":"1.15.8"}`)
 	}))
 	defer srv.Close()
 
@@ -75,7 +75,7 @@ func TestPeekS3Lockfile_Locked(t *testing.T) {
 func TestPeekDynamoDBLock_NotLocked(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-amz-json-1.0")
-		fmt.Fprint(w, `{}`)
+		_, _ = fmt.Fprint(w, `{}`)
 	}))
 	defer srv.Close()
 
@@ -98,7 +98,7 @@ func TestPeekDynamoDBLock_NotLocked(t *testing.T) {
 func TestPeekDynamoDBLock_Locked(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-amz-json-1.0")
-		fmt.Fprint(w, `{
+		_, _ = fmt.Fprint(w, `{
 			"Item": {
 				"LockID": {"S": "my-bucket/envs/prod/terraform.tfstate"},
 				"Info": {"S": "{\"ID\":\"abc-123\",\"Who\":\"runner@github-actions\"}"}

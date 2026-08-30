@@ -322,6 +322,19 @@ end-to-endで結線済み」というもの。
   goroutineで実行し`select`で競わせる方式にしている。タイムアウトした
   goroutineは回収せず放置する（直後に`syscall.Exec`でプロセスイメージが
   丸ごと置き換わるため、リークとして残る心配がない）。
+- gcsのpeekは`credentials`属性（ファイルパスまたはインラインJSON）として
+  サービスアカウントの認証情報JSONのみ対応する。
+  `option.WithAuthCredentialsFile`/`WithAuthCredentialsJSON`に
+  `option.ServiceAccount`を指定して呼び出している。これは元々SDKがパース
+  できるあらゆるJSON認証情報タイプを受け付けていたのを絞ったもので、
+  `staticcheck`のSA1019（型を問わない`WithCredentialsFile`/
+  `WithCredentialsJSON`が非推奨になった件）を解消するための変更——この系統の
+  代替関数はいずれも認証情報タイプを固定する必要がある。`gcloud auth
+  application-default login`が書き出すauthorized-user形式の認証情報や、
+  external-account/workload-identity系の設定は、以前は受け付けられていたが
+  今はクライアント構築に失敗し`supported=false`（チェックを黙ってスキップ）
+  にフォールバックする。`credentials`未設定時はApplication Default
+  Credentialsを使う従来通りの挙動で、影響を受けない。
 - azurermのpeekは `access_key`（共有キー）か、なければAzure SDKの
   `DefaultAzureCredential`（Azure CLIログイン/環境変数/MSI等）のみ対応。
   `client_secret`/OIDC/サービスプリンシパル証明書などterraform本体が

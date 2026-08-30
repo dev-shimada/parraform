@@ -65,7 +65,7 @@ func TestOCILockObjectName(t *testing.T) {
 func TestPeekOCILockObject_NotLocked(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `{"code":"ObjectNotFound","message":"The object does not exist"}`)
+		_, _ = fmt.Fprint(w, `{"code":"ObjectNotFound","message":"The object does not exist"}`)
 	}))
 	defer srv.Close()
 
@@ -85,7 +85,7 @@ func TestPeekOCILockObject_NotLocked(t *testing.T) {
 func TestPeekOCILockObject_Locked(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"ID":"abc-123","Who":"runner@github-actions"}`)
+		_, _ = fmt.Fprint(w, `{"ID":"abc-123","Who":"runner@github-actions"}`)
 	}))
 	defer srv.Close()
 

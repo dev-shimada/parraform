@@ -123,7 +123,7 @@ func peekS3Lockfile(ctx context.Context, client s3GetObjectAPI, bucket, key stri
 		}
 		return Info{}, false, err
 	}
-	defer out.Body.Close()
+	defer func() { _ = out.Body.Close() }()
 
 	body, err := io.ReadAll(out.Body)
 	if err != nil {

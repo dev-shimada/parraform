@@ -32,7 +32,7 @@ func (localChecker) Peek(_ context.Context, cfg backendcfg.Config) (Info, bool, 
 		}
 		return Info{}, false, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 	if err != nil {

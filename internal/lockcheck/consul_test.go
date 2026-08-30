@@ -66,7 +66,7 @@ func TestPeekConsulLockInfo_Locked(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
-		fmt.Fprintf(w, `[{"LockIndex":1,"Key":"terraform/state/.lockinfo","Flags":0,"Value":"%s","CreateIndex":10,"ModifyIndex":10}]`, val)
+		_, _ = fmt.Fprintf(w, `[{"LockIndex":1,"Key":"terraform/state/.lockinfo","Flags":0,"Value":"%s","CreateIndex":10,"ModifyIndex":10}]`, val)
 	}))
 	defer srv.Close()
 

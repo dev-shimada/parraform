@@ -20,7 +20,7 @@ func testGCSClient(t *testing.T, srv *httptest.Server) *storage.Client {
 	if err != nil {
 		t.Fatalf("storage.NewClient() error = %v", err)
 	}
-	t.Cleanup(func() { client.Close() })
+	t.Cleanup(func() { _ = client.Close() })
 	return client
 }
 
@@ -47,7 +47,7 @@ func TestGCSLockObject(t *testing.T) {
 func TestPeekGCSLockfile_NotLocked(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `{"error":{"code":404,"message":"not found"}}`)
+		_, _ = fmt.Fprint(w, `{"error":{"code":404,"message":"not found"}}`)
 	}))
 	defer srv.Close()
 
@@ -69,7 +69,7 @@ func TestPeekGCSLockfile_NotLocked(t *testing.T) {
 func TestPeekGCSLockfile_Locked(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"ID":"abc-123","Who":"runner@github-actions"}`)
+		_, _ = fmt.Fprint(w, `{"ID":"abc-123","Who":"runner@github-actions"}`)
 	}))
 	defer srv.Close()
 

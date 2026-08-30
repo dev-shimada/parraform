@@ -145,7 +145,7 @@ func peekOCILockObject(ctx context.Context, client ociObjectGetter, namespace, b
 	if resp.Content == nil {
 		return Info{Locked: true}, true, nil
 	}
-	defer resp.Content.Close()
+	defer func() { _ = resp.Content.Close() }()
 
 	body, err := io.ReadAll(resp.Content)
 	if err != nil {

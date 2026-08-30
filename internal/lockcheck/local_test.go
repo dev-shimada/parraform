@@ -78,11 +78,11 @@ func TestLocalChecker_Peek_Locked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer holder.Close()
+	defer func() { _ = holder.Close() }()
 	if err := syscall.Flock(int(holder.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		t.Fatalf("failed to acquire holder flock: %v", err)
 	}
-	defer syscall.Flock(int(holder.Fd()), syscall.LOCK_UN)
+	defer func() { _ = syscall.Flock(int(holder.Fd()), syscall.LOCK_UN) }()
 
 	c := localChecker{}
 	cfg := backendcfg.Config{Type: "local", Config: map[string]any{}, Dir: dir, Workspace: "default"}

@@ -374,6 +374,19 @@ claim.
   races it via `select`. A goroutine that times out is abandoned rather than
   collected (immediately afterward, `syscall.Exec` replaces the entire
   process image, so there's no risk of it lingering as a leak).
+- gcs's peek only supports service-account credential JSON for the
+  `credentials` attribute (a file path or inline JSON), passed via
+  `option.WithAuthCredentialsFile`/`WithAuthCredentialsJSON` with
+  `option.ServiceAccount`. This was tightened from accepting any JSON
+  credential type the SDK could parse, to resolve `staticcheck`'s SA1019 on
+  the now-deprecated type-agnostic `WithCredentialsFile`/`WithCredentialsJSON`
+  functions — both of that family's replacements require a fixed credential
+  type. An authorized-user credential (what `gcloud auth
+  application-default login` writes) or an external-account/workload-identity
+  config now fails client construction and falls back to `supported=false`
+  (check silently skipped) rather than being accepted, unlike before. When
+  `credentials` is unset, Application Default Credentials is used as before
+  and is unaffected.
 - azurerm's peek only supports `access_key` (shared key), or otherwise the
   Azure SDK's `DefaultAzureCredential` (Azure CLI login / env vars / MSI,
   etc.). Most of the auth methods terraform itself supports —

@@ -41,7 +41,7 @@ func (gcsChecker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bool, 
 	if err != nil {
 		return Info{}, false, fmt.Errorf("creating GCS client: %w", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	obj := client.Bucket(bucket).Object(object)
 	return peekGCSLockfile(ctx, obj)
@@ -80,9 +80,9 @@ func gcsClientOptions(bcfg map[string]any) ([]option.ClientOption, error) {
 		return nil, nil
 	}
 	if _, err := os.Stat(creds); err == nil {
-		return []option.ClientOption{option.WithCredentialsFile(creds)}, nil
+		return []option.ClientOption{option.WithAuthCredentialsFile(option.ServiceAccount, creds)}, nil
 	}
-	return []option.ClientOption{option.WithCredentialsJSON([]byte(creds))}, nil
+	return []option.ClientOption{option.WithAuthCredentialsJSON(option.ServiceAccount, []byte(creds))}, nil
 }
 
 // gcsObjectReader is the subset of *storage.ObjectHandle used here, so
@@ -99,7 +99,7 @@ func peekGCSLockfile(ctx context.Context, obj gcsObjectReader) (Info, bool, erro
 		}
 		return Info{}, false, err
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 
 	body, err := io.ReadAll(r)
 	if err != nil {
