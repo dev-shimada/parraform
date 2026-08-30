@@ -25,12 +25,8 @@ const consulLockInfoSuffix = "/.lockinfo"
 type consulChecker struct{}
 
 func (consulChecker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bool, error) {
-	path, _ := cfg.Config["path"].(string)
-	if path == "" {
-		return Info{}, false, nil
-	}
-	if lock, ok := cfg.Config["lock"].(bool); ok && !lock {
-		// terraform itself never locks this backend.
+	lockPath, ok := consulLockTarget(cfg)
+	if !ok {
 		return Info{}, false, nil
 	}
 
@@ -39,8 +35,22 @@ func (consulChecker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, boo
 		return Info{}, false, err
 	}
 
-	lockPath := consulStatePath(path, cfg.Workspace)
 	return peekConsulLockInfo(ctx, client.KV(), lockPath)
+}
+
+// consulLockTarget resolves the workspace-qualified state path from raw
+// backend config, so the config-to-identifier wiring itself can be
+// exercised directly with a backendcfg.Config, workspace included.
+func consulLockTarget(cfg backendcfg.Config) (lockPath string, ok bool) {
+	path, _ := cfg.Config["path"].(string)
+	if path == "" {
+		return "", false
+	}
+	if lock, ok := cfg.Config["lock"].(bool); ok && !lock {
+		// terraform itself never locks this backend.
+		return "", false
+	}
+	return consulStatePath(path, cfg.Workspace), true
 }
 
 // consulStatePath reproduces terraform's consul backend Backend.statePath():

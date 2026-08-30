@@ -300,6 +300,59 @@ corruption" to "a stale plan is reliably rejected at apply time."
 - Passthrough, exit codes, and signal handling are tested with a fake script
   on `PATH` that echoes argv and returns the requested exit code, requiring
   neither real terraform nor cloud credentials.
+- `internal/backendcfg` (shared by every backend: cache-file parsing and
+  `TF_WORKSPACE`/`.terraform/environment` workspace resolution) has its own
+  unit tests, independent of any specific backend.
+- Each `LockChecker` is tested at two separate layers, and each layer's
+  coverage is real but does **not** imply the other is covered:
+  1. **Config → lock identifier.** A `<backend>LockTarget(cfg
+     backendcfg.Config) (...)` function isolates "given raw backend config
+     and a workspace, what bucket/key/lease-name/etc. does this checker
+     compute" from client construction and network I/O. This is
+     table-tested per backend (`Test<Backend>LockTarget`), workspace
+     variations included, so a regression like the earlier
+     workspace-unaware-lock bug would be caught here rather than only in
+     production. This layer exists for every backend except `http`
+     (unsupported) and is exercised via `Peek()`'s early-return paths for
+     unsupported/missing config, plus the table test directly for the
+     happy-path identifier math.
+  2. **Lock identifier → Info.** A `peek<Backend>...` function takes an
+     already-constructed (fake or real) client/object handle and interprets
+     its response into `Info{Locked, Who}`. This is what the httptest-based
+     `_Locked`/`_NotLocked` tests exercise.
+  - **kubernetes is the one exception tested through the full chain in one
+    piece**: `TestKubernetesChecker_Peek_EndToEnd` builds a temporary
+    kubeconfig pointing at an `httptest` server and calls
+    `kubernetesChecker{}.Peek(ctx, cfg)` directly, so config extraction,
+    client construction, identifier resolution, and response interpretation
+    are all exercised together through production code, not just their two
+    halves separately. The other backends stop at the two layers above;
+    their client-construction code (`azurermClient`, `cosClient`,
+    `ociClient`, `gcsClientOptions`, etc.) remains outside test coverage, as
+    already noted in the confidence tiers above.
+  - **local is also tested through the full chain**
+    (`TestLocalChecker_Peek_NotLocked`/`_Locked`), since it needs no SDK or
+    mock server: a second, independently-opened file descriptor holding a
+    real `flock` is exactly what "another process holds the lock" looks
+    like, so the real `syscall.Flock` codepath in `Peek()` is exercised
+    directly against a real file.
+  - pg and oss have layer-1 (`pgLockTarget`/`ossLockTarget`) coverage but,
+    consistent with their documented integration-unverified status, no
+    layer-2 test — there is no fake Postgres/TableStore server backing
+    `peekPgAdvisoryLock`/`peekOSSLockRow` in this suite.
+
+**What this does and doesn't guarantee**: the lock-identifier computation is
+table-tested per backend (including workspace handling), and one backend
+(kubernetes) plus the local backend are verified through the full
+production chain end-to-end. Every other backend's SDK client construction
+and live wire behavior were verified by hand (or via `httptest` probing
+during development) but are not exercised by the automated suite — that
+gap is the confidence-tier table above, not something closed by this
+section. "All providers are covered" would overstate it; "the two most
+failure-prone seams — workspace-aware identifier construction, and
+200/404-style response interpretation — are both under test for every
+backend, and wired together end-to-end for two of them" is the accurate
+claim.
 
 ## Known limitations in the current implementation
 

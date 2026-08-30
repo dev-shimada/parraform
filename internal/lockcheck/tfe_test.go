@@ -146,6 +146,65 @@ func TestTFEWorkspaceName(t *testing.T) {
 	}
 }
 
+func TestTFELockTarget(t *testing.T) {
+	t.Run("missing organization", func(t *testing.T) {
+		cfg := testBackendConfigWithType("remote", map[string]any{}, "default")
+		_, _, _, _, ok := tfeLockTarget(cfg)
+		if ok {
+			t.Error("tfeLockTarget() ok = true, want false (missing organization)")
+		}
+	})
+
+	t.Run("missing token", func(t *testing.T) {
+		t.Setenv("TF_TOKEN_app_terraform_io", "")
+		cfg := testBackendConfigWithType("remote", map[string]any{
+			"organization": "my-org",
+			"workspaces":   map[string]any{"name": "prod"},
+		}, "default")
+		_, _, _, _, ok := tfeLockTarget(cfg)
+		if ok {
+			t.Error("tfeLockTarget() ok = true, want false (no token available)")
+		}
+	})
+
+	t.Run("hostname defaults, token from config attribute", func(t *testing.T) {
+		t.Setenv("TF_TOKEN_app_terraform_io", "")
+		cfg := testBackendConfigWithType("remote", map[string]any{
+			"organization": "my-org",
+			"workspaces":   map[string]any{"name": "prod"},
+			"token":        "attr-token",
+		}, "default")
+		hostname, org, workspace, token, ok := tfeLockTarget(cfg)
+		if !ok {
+			t.Fatal("tfeLockTarget() ok = false, want true")
+		}
+		if hostname != "app.terraform.io" || org != "my-org" || workspace != "prod" || token != "attr-token" {
+			t.Errorf("tfeLockTarget() = (%q, %q, %q, %q), want (%q, %q, %q, %q)",
+				hostname, org, workspace, token, "app.terraform.io", "my-org", "prod", "attr-token")
+		}
+	})
+
+	t.Run("custom hostname, TF_TOKEN env var takes precedence over attribute", func(t *testing.T) {
+		// tfeToken only replaces dots with underscores (hyphens are left
+		// as-is); this is the documented gap versus terraform's own
+		// double-underscore hyphen encoding.
+		t.Setenv("TF_TOKEN_my-tfe_example_com", "env-token")
+		cfg := testBackendConfigWithType("remote", map[string]any{
+			"organization": "my-org",
+			"hostname":     "my-tfe.example.com",
+			"workspaces":   map[string]any{"name": "prod"},
+			"token":        "attr-token",
+		}, "default")
+		hostname, _, _, token, ok := tfeLockTarget(cfg)
+		if !ok {
+			t.Fatal("tfeLockTarget() ok = false, want true")
+		}
+		if hostname != "my-tfe.example.com" || token != "env-token" {
+			t.Errorf("tfeLockTarget() = (%q, token=%q), want (%q, token=%q)", hostname, token, "my-tfe.example.com", "env-token")
+		}
+	})
+}
+
 type backendcfgTestConfig struct {
 	Type      string
 	Config    map[string]any

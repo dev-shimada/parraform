@@ -36,22 +36,10 @@ type lockInfoJSON struct {
 type s3Checker struct{}
 
 func (s3Checker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bool, error) {
-	bucket, _ := cfg.Config["bucket"].(string)
-	key, _ := cfg.Config["key"].(string)
-	if bucket == "" || key == "" {
+	bucket, effectiveKey, useLockfile, table, ok := s3LockTarget(cfg)
+	if !ok {
 		return Info{}, false, nil
 	}
-
-	useLockfile, _ := cfg.Config["use_lockfile"].(bool)
-	table, _ := cfg.Config["dynamodb_table"].(string)
-	if !useLockfile && table == "" {
-		// No locking mechanism configured for this backend: nothing to
-		// peek, and terraform itself won't be locking either.
-		return Info{}, false, nil
-	}
-
-	prefix, _ := cfg.Config["workspace_key_prefix"].(string)
-	effectiveKey := workspaceObjectKey(key, cfg.Workspace, prefix)
 
 	awsCfg, err := loadAWSConfig(ctx, cfg.Config)
 	if err != nil {
@@ -65,6 +53,30 @@ func (s3Checker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bool, e
 
 	client := dynamodb.NewFromConfig(awsCfg)
 	return peekDynamoDBLock(ctx, client, table, bucket, effectiveKey)
+}
+
+// s3LockTarget resolves the bucket, workspace-qualified object key, and
+// which locking mechanism (if any) is configured, from raw backend config.
+// Split out from Peek so the config-to-identifier wiring itself -- as
+// opposed to the pure key-naming math in workspaceObjectKey -- can be
+// exercised directly with a backendcfg.Config, workspace included.
+func s3LockTarget(cfg backendcfg.Config) (bucket, key string, useLockfile bool, table string, ok bool) {
+	bucket, _ = cfg.Config["bucket"].(string)
+	key, _ = cfg.Config["key"].(string)
+	if bucket == "" || key == "" {
+		return "", "", false, "", false
+	}
+
+	useLockfile, _ = cfg.Config["use_lockfile"].(bool)
+	table, _ = cfg.Config["dynamodb_table"].(string)
+	if !useLockfile && table == "" {
+		// No locking mechanism configured for this backend: nothing to
+		// peek, and terraform itself won't be locking either.
+		return "", "", false, "", false
+	}
+
+	prefix, _ := cfg.Config["workspace_key_prefix"].(string)
+	return bucket, workspaceObjectKey(key, cfg.Workspace, prefix), useLockfile, table, true
 }
 
 // workspaceObjectKey mirrors the S3 backend's own key derivation: the

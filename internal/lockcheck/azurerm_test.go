@@ -107,6 +107,46 @@ func TestPeekAzurermLease_BlobNotFound(t *testing.T) {
 	}
 }
 
+func TestAzurermLockTarget(t *testing.T) {
+	cases := []struct {
+		name          string
+		cfg           map[string]any
+		workspace     string
+		wantAccount   string
+		wantContainer string
+		wantBlobName  string
+		wantOK        bool
+	}{
+		{"missing container/key", map[string]any{"storage_account_name": "foo"}, "default", "", "", "", false},
+		{
+			"default workspace",
+			map[string]any{"storage_account_name": "foo", "container_name": "mycontainer", "key": "terraform.tfstate"},
+			"default", "foo", "mycontainer", "terraform.tfstate", true,
+		},
+		{
+			"non-default workspace",
+			map[string]any{"storage_account_name": "foo", "container_name": "mycontainer", "key": "terraform.tfstate"},
+			"staging", "foo", "mycontainer", "terraform.tfstateenv:staging", true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := testBackendConfigWithType("azurerm", c.cfg, c.workspace)
+			account, container, blobName, ok := azurermLockTarget(cfg)
+			if ok != c.wantOK {
+				t.Fatalf("azurermLockTarget() ok = %v, want %v", ok, c.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if account != c.wantAccount || container != c.wantContainer || blobName != c.wantBlobName {
+				t.Errorf("azurermLockTarget() = (%q, %q, %q), want (%q, %q, %q)",
+					account, container, blobName, c.wantAccount, c.wantContainer, c.wantBlobName)
+			}
+		})
+	}
+}
+
 func TestAzurermChecker_Peek_MissingConfig(t *testing.T) {
 	c := azurermChecker{}
 	cfg := testBackendConfig(map[string]any{"storage_account_name": "foo"})

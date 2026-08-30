@@ -91,6 +91,37 @@ func TestPeekGCSLockfile_Locked(t *testing.T) {
 	}
 }
 
+func TestGCSLockTarget(t *testing.T) {
+	cases := []struct {
+		name       string
+		cfg        map[string]any
+		workspace  string
+		wantBucket string
+		wantObject string
+		wantOK     bool
+	}{
+		{"missing bucket", map[string]any{"prefix": "terraform/state"}, "default", "", "", false},
+		{"default workspace", map[string]any{"bucket": "my-bucket", "prefix": "terraform/state"}, "default", "my-bucket", "terraform/state/default.tflock", true},
+		{"empty workspace treated as default", map[string]any{"bucket": "my-bucket", "prefix": "terraform/state"}, "", "my-bucket", "terraform/state/default.tflock", true},
+		{"non-default workspace", map[string]any{"bucket": "my-bucket", "prefix": "terraform/state"}, "staging", "my-bucket", "terraform/state/staging.tflock", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := testBackendConfigWithType("gcs", c.cfg, c.workspace)
+			bucket, object, ok := gcsLockTarget(cfg)
+			if ok != c.wantOK {
+				t.Fatalf("gcsLockTarget() ok = %v, want %v", ok, c.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if bucket != c.wantBucket || object != c.wantObject {
+				t.Errorf("gcsLockTarget() = (%q, %q), want (%q, %q)", bucket, object, c.wantBucket, c.wantObject)
+			}
+		})
+	}
+}
+
 func TestGCSChecker_Peek_MissingBucket(t *testing.T) {
 	c := gcsChecker{}
 	cfg := testBackendConfig(map[string]any{"prefix": "terraform/state"})

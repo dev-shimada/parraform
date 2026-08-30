@@ -27,15 +27,9 @@ func init() {
 type gcsChecker struct{}
 
 func (gcsChecker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bool, error) {
-	bucket, _ := cfg.Config["bucket"].(string)
-	if bucket == "" {
+	bucket, object, ok := gcsLockTarget(cfg)
+	if !ok {
 		return Info{}, false, nil
-	}
-	prefix, _ := cfg.Config["prefix"].(string)
-
-	workspace := cfg.Workspace
-	if workspace == "" {
-		workspace = "default"
 	}
 
 	opts, err := gcsClientOptions(cfg.Config)
@@ -49,8 +43,25 @@ func (gcsChecker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bool, 
 	}
 	defer client.Close()
 
-	obj := client.Bucket(bucket).Object(gcsLockObject(prefix, workspace))
+	obj := client.Bucket(bucket).Object(object)
 	return peekGCSLockfile(ctx, obj)
+}
+
+// gcsLockTarget resolves the bucket and workspace-qualified lock object
+// name from raw backend config, so the config-to-identifier wiring itself
+// can be exercised directly with a backendcfg.Config, workspace included.
+func gcsLockTarget(cfg backendcfg.Config) (bucket, object string, ok bool) {
+	bucket, _ = cfg.Config["bucket"].(string)
+	if bucket == "" {
+		return "", "", false
+	}
+	prefix, _ := cfg.Config["prefix"].(string)
+
+	workspace := cfg.Workspace
+	if workspace == "" {
+		workspace = "default"
+	}
+	return bucket, gcsLockObject(prefix, workspace), true
 }
 
 // gcsLockObject reproduces terraform's gcs backend lockFile(name).

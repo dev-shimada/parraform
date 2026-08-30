@@ -105,6 +105,45 @@ func TestPeekOCILockObject_Locked(t *testing.T) {
 	}
 }
 
+func TestOCILockTarget(t *testing.T) {
+	cases := []struct {
+		name          string
+		cfg           map[string]any
+		workspace     string
+		wantBucket    string
+		wantNamespace string
+		wantObject    string
+		wantOK        bool
+	}{
+		{"missing namespace", map[string]any{"bucket": "mybucket"}, "default", "", "", "", false},
+		{
+			"default workspace, default key/prefix",
+			map[string]any{"bucket": "mybucket", "namespace": "myns"}, "default",
+			"mybucket", "myns", "terraform.tfstate.lock", true,
+		},
+		{
+			"non-default workspace, custom key/prefix",
+			map[string]any{"bucket": "mybucket", "namespace": "myns", "key": "custom.tfstate", "workspace_key_prefix": "custom-prefix"}, "staging",
+			"mybucket", "myns", "custom-prefix/staging/custom.tfstate.lock", true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := testBackendConfigWithType("oci", c.cfg, c.workspace)
+			bucket, namespace, object, ok := ociLockTarget(cfg)
+			if ok != c.wantOK {
+				t.Fatalf("ociLockTarget() ok = %v, want %v", ok, c.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if bucket != c.wantBucket || namespace != c.wantNamespace || object != c.wantObject {
+				t.Errorf("ociLockTarget() = (%q, %q, %q), want (%q, %q, %q)", bucket, namespace, object, c.wantBucket, c.wantNamespace, c.wantObject)
+			}
+		})
+	}
+}
+
 func TestOCIChecker_Peek_MissingBucketOrNamespace(t *testing.T) {
 	c := ociChecker{}
 	cfg := testBackendConfig(map[string]any{"bucket": "mybucket"})

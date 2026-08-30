@@ -26,6 +26,67 @@ func TestOSSStateFile(t *testing.T) {
 	}
 }
 
+func TestOSSLockTarget(t *testing.T) {
+	cases := []struct {
+		name             string
+		cfg              map[string]any
+		workspace        string
+		wantTable        string
+		wantInstanceName string
+		wantEndpoint     string
+		wantLockPath     string
+		wantOK           bool
+	}{
+		{"tablestore_table not configured", map[string]any{"bucket": "my-bucket"}, "default", "", "", "", "", false},
+		{"missing bucket", map[string]any{"tablestore_table": "locks"}, "default", "", "", "", "", false},
+		{
+			"missing instance/endpoint",
+			map[string]any{"tablestore_table": "locks", "bucket": "my-bucket"}, "default",
+			"", "", "", "", false,
+		},
+		{
+			"default workspace, defaults applied",
+			map[string]any{
+				"tablestore_table":         "locks",
+				"bucket":                   "my-bucket",
+				"tablestore_instance_name": "my-instance",
+				"tablestore_endpoint":      "https://my-instance.cn-hangzhou.ots.aliyuncs.com",
+			},
+			"default",
+			"locks", "my-instance", "https://my-instance.cn-hangzhou.ots.aliyuncs.com", "my-bucket/env:/terraform.tfstate", true,
+		},
+		{
+			"non-default workspace, custom prefix/key",
+			map[string]any{
+				"tablestore_table":         "locks",
+				"bucket":                   "my-bucket",
+				"tablestore_instance_name": "my-instance",
+				"tablestore_endpoint":      "https://my-instance.cn-hangzhou.ots.aliyuncs.com",
+				"prefix":                   "custom",
+				"key":                      "custom.tfstate",
+			},
+			"staging",
+			"locks", "my-instance", "https://my-instance.cn-hangzhou.ots.aliyuncs.com", "my-bucket/custom/staging/custom.tfstate", true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := testBackendConfigWithType("oss", c.cfg, c.workspace)
+			table, instanceName, endpoint, lockPath, ok := ossLockTarget(cfg)
+			if ok != c.wantOK {
+				t.Fatalf("ossLockTarget() ok = %v, want %v", ok, c.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if table != c.wantTable || instanceName != c.wantInstanceName || endpoint != c.wantEndpoint || lockPath != c.wantLockPath {
+				t.Errorf("ossLockTarget() = (%q, %q, %q, %q), want (%q, %q, %q, %q)",
+					table, instanceName, endpoint, lockPath, c.wantTable, c.wantInstanceName, c.wantEndpoint, c.wantLockPath)
+			}
+		})
+	}
+}
+
 func TestOSSChecker_Peek_LockingNotConfigured(t *testing.T) {
 	c := ossChecker{}
 	cfg := testBackendConfig(map[string]any{"bucket": "my-bucket"})

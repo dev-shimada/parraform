@@ -259,6 +259,50 @@ read-after-write一貫性があるため、apply中のplanが「壊れた」状�
 - ロック回避・パススルー判定などの純粋関数はterraform非依存でtable-driven test。
 - passthrough・終了コード・シグナル系はPATH上にargvをechoして終了コードを返す
   フェイクスクリプトを置いてテストし、実terraformやクラウド認証情報を不要にする。
+- `internal/backendcfg`（全バックエンド共通のキャッシュファイル解析と
+  `TF_WORKSPACE`/`.terraform/environment`によるワークスペース解決）は、特定の
+  バックエンドに依存しない単体テストを持つ。
+- 各`LockChecker`は2つの層に分けてテストしており、どちらか一方のカバレッジが
+  もう一方を保証するわけではない点に注意:
+  1. **設定 → ロック識別子。** `<backend>LockTarget(cfg backendcfg.Config)
+     (...)`という関数を切り出し、「生の設定とワークスペースから、どの
+     bucket/key/lease名等を計算するか」をクライアント構築・通信から分離した。
+     ワークスペースのバリエーションを含めてtable-driven testしており
+     (`Test<Backend>LockTarget`)、以前実際に出したワークスペース非対応バグの
+     ような回帰があれば、本番で気づく前にここで検出できる。この層は`http`
+     （非対応）を除く全バックエンドに存在し、設定不足時の`Peek()`早期リターン
+     経路と、識別子計算のハッピーパスをtable testで直接検証している。
+  2. **ロック識別子 → Info。** `peek<Backend>...`という関数は、（フェイクまたは
+     実際に）構築済みのクライアント/オブジェクトハンドルを受け取り、レスポンス
+     を`Info{Locked, Who}`に解釈する。httptestベースの`_Locked`/`_NotLocked`
+     テストが検証しているのはこの層。
+  - **kubernetesのみ、この2層を1つのテストで通しで検証している**:
+    `TestKubernetesChecker_Peek_EndToEnd`は一時的なkubeconfigを用意して
+    httptestサーバーを指させ、`kubernetesChecker{}.Peek(ctx, cfg)`を直接
+    呼び出す。設定抽出・クライアント構築・識別子解決・レスポンス解釈のすべてが
+    本番コードを通して一括で検証される。他のバックエンドは上記2層止まりで、
+    クライアント構築コード（`azurermClient`/`cosClient`/`ociClient`/
+    `gcsClientOptions`等）自体は、既に信頼度表に記載の通りテスト対象外のまま。
+  - **localも通しで検証している**
+    (`TestLocalChecker_Peek_NotLocked`/`_Locked`)。SDKやモックサーバーが不要な
+    ため実現しやすく、同一プロセス内で独立にopenしたもう1つのfdで実際に
+    `flock`を保持させることで「別プロセスがロック保持中」を正確に再現でき、
+    `Peek()`内の本物の`syscall.Flock`経路を実際に通している。
+  - pgとossは第1層（`pgLockTarget`/`ossLockTarget`）のみカバーしており、
+    ドキュメント済みの「統合検証未実施」というステータスと整合して、第2層の
+    テストはない——`peekPgAdvisoryLock`/`peekOSSLockRow`を裏付けるフェイクの
+    Postgres/TableStoreサーバーはこのテストスイートには存在しない。
+
+**これが担保していること・していないこと**: ロック識別子の計算はバックエンド
+ごとにワークスペースの扱いも含めてtable testされており、kubernetesと
+localの2つは本番のチェーン全体を通しでend-to-endに検証している。それ以外の
+バックエンドのSDKクライアント構築や実際のワイヤ挙動は、開発時に手動
+（または`httptest`によるプロービング）で検証済みだが、自動テストスイートには
+含まれていない——このギャップは上記の信頼度表そのものであり、本節で埋まった
+わけではない。「全プロバイダーが担保されている」は言い過ぎであり、正確な主張は
+「最も壊れやすい2つの継ぎ目——ワークスペースを考慮したロック識別子の組み立てと、
+200/404的なレスポンス解釈——は全バックエンドでテストされており、うち2つは
+end-to-endで結線済み」というもの。
 
 ## 実装済みの既知の制約
 

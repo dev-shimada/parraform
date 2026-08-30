@@ -35,20 +35,10 @@ const kubernetesLockInfoAnnotation = "app.terraform.io/lock-info"
 type kubernetesChecker struct{}
 
 func (kubernetesChecker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bool, error) {
-	namespace, _ := cfg.Config["namespace"].(string)
-	if namespace == "" {
-		namespace = "default"
-	}
-	suffix, _ := cfg.Config["secret_suffix"].(string)
-	if suffix == "" {
+	namespace, leaseName, ok := kubernetesLockTarget(cfg)
+	if !ok {
 		return Info{}, false, nil
 	}
-
-	workspace := cfg.Workspace
-	if workspace == "" {
-		workspace = "default"
-	}
-	leaseName := kubernetesLeaseName(workspace, suffix)
 
 	client, err := kubernetesClientset(cfg.Config)
 	if err != nil {
@@ -56,6 +46,27 @@ func (kubernetesChecker) Peek(ctx context.Context, cfg backendcfg.Config) (Info,
 	}
 
 	return peekKubernetesLease(ctx, client.CoordinationV1().Leases(namespace), leaseName)
+}
+
+// kubernetesLockTarget resolves the namespace and workspace-qualified
+// lease name from raw backend config, so the config-to-identifier wiring
+// itself can be exercised directly with a backendcfg.Config, workspace
+// included.
+func kubernetesLockTarget(cfg backendcfg.Config) (namespace, leaseName string, ok bool) {
+	namespace, _ = cfg.Config["namespace"].(string)
+	if namespace == "" {
+		namespace = "default"
+	}
+	suffix, _ := cfg.Config["secret_suffix"].(string)
+	if suffix == "" {
+		return "", "", false
+	}
+
+	workspace := cfg.Workspace
+	if workspace == "" {
+		workspace = "default"
+	}
+	return namespace, kubernetesLeaseName(workspace, suffix), true
 }
 
 // kubernetesLeaseName reproduces terraform's kubernetes backend naming:

@@ -42,32 +42,10 @@ const ossPkName = "LockID"
 type ossChecker struct{}
 
 func (ossChecker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bool, error) {
-	table, _ := cfg.Config["tablestore_table"].(string)
-	if table == "" {
-		// Locking via TableStore is opt-in in this backend; if unset,
-		// terraform itself never locks.
+	table, instanceName, endpoint, lockPath, ok := ossLockTarget(cfg)
+	if !ok {
 		return Info{}, false, nil
 	}
-	bucket, _ := cfg.Config["bucket"].(string)
-	if bucket == "" {
-		return Info{}, false, nil
-	}
-	instanceName, _ := cfg.Config["tablestore_instance_name"].(string)
-	endpoint, _ := cfg.Config["tablestore_endpoint"].(string)
-	if instanceName == "" || endpoint == "" {
-		return Info{}, false, nil
-	}
-
-	prefix, _ := cfg.Config["prefix"].(string)
-	if prefix == "" {
-		prefix = "env:"
-	}
-	key, _ := cfg.Config["key"].(string)
-	if key == "" {
-		key = "terraform.tfstate"
-	}
-
-	lockPath := bucket + "/" + ossStateFile(prefix, cfg.Workspace, key)
 
 	accessKey, _ := cfg.Config["access_key"].(string)
 	if accessKey == "" {
@@ -80,6 +58,39 @@ func (ossChecker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bool, 
 
 	client := tablestore.NewClient(endpoint, instanceName, accessKey, secretKey)
 	return peekOSSLockRow(client, table, lockPath)
+}
+
+// ossLockTarget resolves the TableStore table/instance/endpoint and the
+// workspace-qualified lock row key from raw backend config, so the
+// config-to-identifier wiring itself can be exercised directly with a
+// backendcfg.Config, workspace included.
+func ossLockTarget(cfg backendcfg.Config) (table, instanceName, endpoint, lockPath string, ok bool) {
+	table, _ = cfg.Config["tablestore_table"].(string)
+	if table == "" {
+		// Locking via TableStore is opt-in in this backend; if unset,
+		// terraform itself never locks.
+		return "", "", "", "", false
+	}
+	bucket, _ := cfg.Config["bucket"].(string)
+	if bucket == "" {
+		return "", "", "", "", false
+	}
+	instanceName, _ = cfg.Config["tablestore_instance_name"].(string)
+	endpoint, _ = cfg.Config["tablestore_endpoint"].(string)
+	if instanceName == "" || endpoint == "" {
+		return "", "", "", "", false
+	}
+
+	prefix, _ := cfg.Config["prefix"].(string)
+	if prefix == "" {
+		prefix = "env:"
+	}
+	key, _ := cfg.Config["key"].(string)
+	if key == "" {
+		key = "terraform.tfstate"
+	}
+
+	return table, instanceName, endpoint, bucket + "/" + ossStateFile(prefix, cfg.Workspace, key), true
 }
 
 // ossStateFile reproduces terraform's oss backend Backend.stateFile():

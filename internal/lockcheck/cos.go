@@ -32,18 +32,10 @@ func init() {
 type cosChecker struct{}
 
 func (cosChecker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bool, error) {
-	bucket, _ := cfg.Config["bucket"].(string)
-	region, _ := cfg.Config["region"].(string)
-	if bucket == "" || region == "" {
+	bucket, region, lockKey, ok := cosLockTarget(cfg)
+	if !ok {
 		return Info{}, false, nil
 	}
-	prefix, _ := cfg.Config["prefix"].(string)
-	key, _ := cfg.Config["key"].(string)
-	if key == "" {
-		key = "terraform.tfstate"
-	}
-
-	lockKey := cosLockObjectKey(prefix, cfg.Workspace, key)
 
 	client, err := cosClient(bucket, region, cfg.Config)
 	if err != nil {
@@ -51,6 +43,24 @@ func (cosChecker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bool, 
 	}
 
 	return peekCOSLockObject(ctx, client.Object, lockKey)
+}
+
+// cosLockTarget resolves the bucket, region, and workspace-qualified lock
+// object key from raw backend config, so the config-to-identifier wiring
+// itself can be exercised directly with a backendcfg.Config, workspace
+// included.
+func cosLockTarget(cfg backendcfg.Config) (bucket, region, lockKey string, ok bool) {
+	bucket, _ = cfg.Config["bucket"].(string)
+	region, _ = cfg.Config["region"].(string)
+	if bucket == "" || region == "" {
+		return "", "", "", false
+	}
+	prefix, _ := cfg.Config["prefix"].(string)
+	key, _ := cfg.Config["key"].(string)
+	if key == "" {
+		key = "terraform.tfstate"
+	}
+	return bucket, region, cosLockObjectKey(prefix, cfg.Workspace, key), true
 }
 
 // cosLockObjectKey reproduces terraform's cos backend stateFile()+lockFile():

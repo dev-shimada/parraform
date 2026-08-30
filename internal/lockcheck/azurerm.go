@@ -35,14 +35,10 @@ const azurermLockMetaKey = "terraformlockid"
 type azurermChecker struct{}
 
 func (azurermChecker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bool, error) {
-	account, _ := cfg.Config["storage_account_name"].(string)
-	container, _ := cfg.Config["container_name"].(string)
-	key, _ := cfg.Config["key"].(string)
-	if account == "" || container == "" || key == "" {
+	account, container, blobName, ok := azurermLockTarget(cfg)
+	if !ok {
 		return Info{}, false, nil
 	}
-
-	blobName := azurermBlobName(key, cfg.Workspace)
 
 	client, err := azurermClient(account, cfg.Config)
 	if err != nil {
@@ -51,6 +47,20 @@ func (azurermChecker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bo
 
 	bc := client.ServiceClient().NewContainerClient(container).NewBlobClient(blobName)
 	return peekAzurermLease(ctx, bc)
+}
+
+// azurermLockTarget resolves the storage account, container, and
+// workspace-qualified blob name from raw backend config, so the
+// config-to-identifier wiring itself can be exercised directly with a
+// backendcfg.Config, workspace included.
+func azurermLockTarget(cfg backendcfg.Config) (account, container, blobName string, ok bool) {
+	account, _ = cfg.Config["storage_account_name"].(string)
+	container, _ = cfg.Config["container_name"].(string)
+	key, _ := cfg.Config["key"].(string)
+	if account == "" || container == "" || key == "" {
+		return "", "", "", false
+	}
+	return account, container, azurermBlobName(key, cfg.Workspace), true
 }
 
 // azurermBlobName reproduces terraform's azurerm backend Backend.path():

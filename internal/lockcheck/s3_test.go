@@ -164,6 +164,82 @@ func TestWorkspaceObjectKey(t *testing.T) {
 	}
 }
 
+func TestS3LockTarget(t *testing.T) {
+	cases := []struct {
+		name            string
+		cfg             map[string]any
+		workspace       string
+		wantBucket      string
+		wantKey         string
+		wantUseLockfile bool
+		wantTable       string
+		wantOK          bool
+	}{
+		{
+			name:   "missing bucket or key",
+			cfg:    map[string]any{"region": "us-east-1"},
+			wantOK: false,
+		},
+		{
+			name:   "no locking mechanism configured",
+			cfg:    map[string]any{"bucket": "my-bucket", "key": "envs/prod/terraform.tfstate"},
+			wantOK: false,
+		},
+		{
+			name:            "native lockfile, default workspace",
+			cfg:             map[string]any{"bucket": "my-bucket", "key": "envs/prod/terraform.tfstate", "use_lockfile": true},
+			workspace:       "default",
+			wantBucket:      "my-bucket",
+			wantKey:         "envs/prod/terraform.tfstate",
+			wantUseLockfile: true,
+			wantOK:          true,
+		},
+		{
+			name:       "dynamodb, non-default workspace, custom prefix",
+			cfg:        map[string]any{"bucket": "my-bucket", "key": "terraform.tfstate", "dynamodb_table": "tf-locks", "workspace_key_prefix": "custom"},
+			workspace:  "staging",
+			wantBucket: "my-bucket",
+			wantKey:    "custom/staging/terraform.tfstate",
+			wantTable:  "tf-locks",
+			wantOK:     true,
+		},
+		{
+			name:            "native lockfile, non-default workspace, default prefix",
+			cfg:             map[string]any{"bucket": "my-bucket", "key": "terraform.tfstate", "use_lockfile": true},
+			workspace:       "staging",
+			wantBucket:      "my-bucket",
+			wantKey:         "env:/staging/terraform.tfstate",
+			wantUseLockfile: true,
+			wantOK:          true,
+		},
+		{
+			name:       "dynamodb, default workspace",
+			cfg:        map[string]any{"bucket": "my-bucket", "key": "envs/prod/terraform.tfstate", "dynamodb_table": "tf-locks"},
+			workspace:  "default",
+			wantBucket: "my-bucket",
+			wantKey:    "envs/prod/terraform.tfstate",
+			wantTable:  "tf-locks",
+			wantOK:     true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := testBackendConfigWithType("s3", c.cfg, c.workspace)
+			bucket, key, useLockfile, table, ok := s3LockTarget(cfg)
+			if ok != c.wantOK {
+				t.Fatalf("s3LockTarget() ok = %v, want %v", ok, c.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if bucket != c.wantBucket || key != c.wantKey || useLockfile != c.wantUseLockfile || table != c.wantTable {
+				t.Errorf("s3LockTarget() = (%q, %q, %v, %q), want (%q, %q, %v, %q)",
+					bucket, key, useLockfile, table, c.wantBucket, c.wantKey, c.wantUseLockfile, c.wantTable)
+			}
+		})
+	}
+}
+
 func TestS3Checker_Peek_MissingBucketOrKey(t *testing.T) {
 	c := s3Checker{}
 	cfg := testBackendConfig(map[string]any{"region": "us-east-1"})

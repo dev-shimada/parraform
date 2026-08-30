@@ -54,23 +54,9 @@ func (pgChecker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bool, e
 	// is cached to .terraform/terraform.tfstate, so a config that omits
 	// these attributes in favor of the env var (the common CI pattern)
 	// would otherwise silently look unconfigured here.
-	connStr, _ := cfg.Config["conn_str"].(string)
-	if connStr == "" {
-		connStr = os.Getenv("PG_CONN_STR")
-	}
-	if connStr == "" {
+	connStr, schema, workspace, ok := pgLockTarget(cfg)
+	if !ok {
 		return Info{}, false, nil
-	}
-	schema, _ := cfg.Config["schema_name"].(string)
-	if schema == "" {
-		schema = os.Getenv("PG_SCHEMA_NAME")
-	}
-	if schema == "" {
-		schema = "terraform_remote_state"
-	}
-	workspace := cfg.Workspace
-	if workspace == "" {
-		workspace = "default"
 	}
 
 	db, err := sql.Open("pgx", connStr)
@@ -80,6 +66,32 @@ func (pgChecker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bool, e
 	defer db.Close()
 
 	return peekPgAdvisoryLock(ctx, db, schema, workspace)
+}
+
+// pgLockTarget resolves the connection string, schema, and workspace from
+// raw backend config (including the env var fallbacks terraform itself
+// applies at Configure() time), so the config-to-identifier wiring itself
+// can be exercised directly with a backendcfg.Config, workspace included.
+func pgLockTarget(cfg backendcfg.Config) (connStr, schema, workspace string, ok bool) {
+	connStr, _ = cfg.Config["conn_str"].(string)
+	if connStr == "" {
+		connStr = os.Getenv("PG_CONN_STR")
+	}
+	if connStr == "" {
+		return "", "", "", false
+	}
+	schema, _ = cfg.Config["schema_name"].(string)
+	if schema == "" {
+		schema = os.Getenv("PG_SCHEMA_NAME")
+	}
+	if schema == "" {
+		schema = "terraform_remote_state"
+	}
+	workspace = cfg.Workspace
+	if workspace == "" {
+		workspace = "default"
+	}
+	return connStr, schema, workspace, true
 }
 
 // pgQuoteIdent quotes a Postgres identifier defensively (schema_name comes

@@ -85,6 +85,45 @@ func TestPeekCOSLockObject_Locked(t *testing.T) {
 	}
 }
 
+func TestCOSLockTarget(t *testing.T) {
+	cases := []struct {
+		name       string
+		cfg        map[string]any
+		workspace  string
+		wantBucket string
+		wantRegion string
+		wantKey    string
+		wantOK     bool
+	}{
+		{"missing region", map[string]any{"bucket": "my-bucket"}, "default", "", "", "", false},
+		{
+			"default workspace, default key", map[string]any{"bucket": "my-bucket", "region": "ap-guangzhou"}, "default",
+			"my-bucket", "ap-guangzhou", "terraform.tfstate.tflock", true,
+		},
+		{
+			"non-default workspace, explicit key and prefix",
+			map[string]any{"bucket": "my-bucket", "region": "ap-guangzhou", "prefix": "terraform/state", "key": "custom.tfstate"},
+			"staging",
+			"my-bucket", "ap-guangzhou", "terraform/state/staging/custom.tfstate.tflock", true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := testBackendConfigWithType("cos", c.cfg, c.workspace)
+			bucket, region, key, ok := cosLockTarget(cfg)
+			if ok != c.wantOK {
+				t.Fatalf("cosLockTarget() ok = %v, want %v", ok, c.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if bucket != c.wantBucket || region != c.wantRegion || key != c.wantKey {
+				t.Errorf("cosLockTarget() = (%q, %q, %q), want (%q, %q, %q)", bucket, region, key, c.wantBucket, c.wantRegion, c.wantKey)
+			}
+		})
+	}
+}
+
 func TestCOSChecker_Peek_MissingBucketOrRegion(t *testing.T) {
 	c := cosChecker{}
 	cfg := testBackendConfig(map[string]any{"bucket": "my-bucket"})

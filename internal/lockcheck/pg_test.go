@@ -20,6 +20,59 @@ func TestPgQuoteIdent(t *testing.T) {
 	}
 }
 
+func TestPgLockTarget(t *testing.T) {
+	t.Run("missing conn_str, no env fallback", func(t *testing.T) {
+		t.Setenv("PG_CONN_STR", "")
+		cfg := testBackendConfigWithType("pg", map[string]any{"schema_name": "terraform_remote_state"}, "default")
+		_, _, _, ok := pgLockTarget(cfg)
+		if ok {
+			t.Error("pgLockTarget() ok = true, want false (no conn_str, no PG_CONN_STR)")
+		}
+	})
+
+	t.Run("conn_str and schema from config, workspace resolved", func(t *testing.T) {
+		t.Setenv("PG_CONN_STR", "")
+		t.Setenv("PG_SCHEMA_NAME", "")
+		cfg := testBackendConfigWithType("pg", map[string]any{
+			"conn_str":    "postgres://x/y",
+			"schema_name": "my_schema",
+		}, "staging")
+		connStr, schema, workspace, ok := pgLockTarget(cfg)
+		if !ok {
+			t.Fatal("pgLockTarget() ok = false, want true")
+		}
+		if connStr != "postgres://x/y" || schema != "my_schema" || workspace != "staging" {
+			t.Errorf("pgLockTarget() = (%q, %q, %q), want (%q, %q, %q)", connStr, schema, workspace, "postgres://x/y", "my_schema", "staging")
+		}
+	})
+
+	t.Run("conn_str and schema fall back to env vars, workspace defaults", func(t *testing.T) {
+		t.Setenv("PG_CONN_STR", "postgres://env/db")
+		t.Setenv("PG_SCHEMA_NAME", "env_schema")
+		cfg := testBackendConfigWithType("pg", map[string]any{}, "")
+		connStr, schema, workspace, ok := pgLockTarget(cfg)
+		if !ok {
+			t.Fatal("pgLockTarget() ok = false, want true")
+		}
+		if connStr != "postgres://env/db" || schema != "env_schema" || workspace != "default" {
+			t.Errorf("pgLockTarget() = (%q, %q, %q), want (%q, %q, %q)", connStr, schema, workspace, "postgres://env/db", "env_schema", "default")
+		}
+	})
+
+	t.Run("schema defaults to terraform_remote_state when unset everywhere", func(t *testing.T) {
+		t.Setenv("PG_CONN_STR", "")
+		t.Setenv("PG_SCHEMA_NAME", "")
+		cfg := testBackendConfigWithType("pg", map[string]any{"conn_str": "postgres://x/y"}, "default")
+		_, schema, _, ok := pgLockTarget(cfg)
+		if !ok {
+			t.Fatal("pgLockTarget() ok = false, want true")
+		}
+		if schema != "terraform_remote_state" {
+			t.Errorf("schema = %q, want %q", schema, "terraform_remote_state")
+		}
+	})
+}
+
 func TestPgChecker_Peek_MissingConnStr(t *testing.T) {
 	c := pgChecker{}
 	cfg := testBackendConfig(map[string]any{"schema_name": "terraform_remote_state"})

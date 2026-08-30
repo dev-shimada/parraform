@@ -22,14 +22,7 @@ func init() {
 type localChecker struct{}
 
 func (localChecker) Peek(_ context.Context, cfg backendcfg.Config) (Info, bool, error) {
-	path, _ := cfg.Config["path"].(string)
-	if path == "" {
-		path = "terraform.tfstate"
-	}
-	path = workspaceStatePath(path, cfg.Workspace)
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(cfg.Dir, path)
-	}
+	path := localLockTarget(cfg)
 
 	f, err := os.Open(path)
 	if err != nil {
@@ -48,6 +41,21 @@ func (localChecker) Peek(_ context.Context, cfg backendcfg.Config) (Info, bool, 
 	}
 	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	return Info{Locked: false}, true, nil
+}
+
+// localLockTarget resolves the absolute, workspace-qualified state file
+// path from raw backend config, so the config-to-identifier wiring itself
+// can be exercised directly with a backendcfg.Config, workspace included.
+func localLockTarget(cfg backendcfg.Config) string {
+	path, _ := cfg.Config["path"].(string)
+	if path == "" {
+		path = "terraform.tfstate"
+	}
+	path = workspaceStatePath(path, cfg.Workspace)
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(cfg.Dir, path)
+	}
+	return path
 }
 
 // workspaceStatePath mirrors terraform's local backend: the default

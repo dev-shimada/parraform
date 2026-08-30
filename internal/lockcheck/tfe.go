@@ -40,23 +40,8 @@ func init() {
 type tfeChecker struct{}
 
 func (tfeChecker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bool, error) {
-	org, _ := cfg.Config["organization"].(string)
-	if org == "" {
-		return Info{}, false, nil
-	}
-
-	hostname, _ := cfg.Config["hostname"].(string)
-	if hostname == "" {
-		hostname = "app.terraform.io"
-	}
-
-	workspace, ok := tfeWorkspaceName(cfg)
+	hostname, org, workspace, token, ok := tfeLockTarget(cfg)
 	if !ok {
-		return Info{}, false, nil
-	}
-
-	token := tfeToken(hostname, cfg.Config)
-	if token == "" {
 		return Info{}, false, nil
 	}
 
@@ -69,6 +54,34 @@ func (tfeChecker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bool, 
 	}
 
 	return peekTFEWorkspaceLock(ctx, client.Workspaces, org, workspace)
+}
+
+// tfeLockTarget resolves the hostname, organization, workspace, and API
+// token from raw backend config, so the full config-to-identifier wiring
+// (not just tfeWorkspaceName's slice of it) can be exercised directly with
+// a backendcfg.Config.
+func tfeLockTarget(cfg backendcfg.Config) (hostname, org, workspace, token string, ok bool) {
+	org, _ = cfg.Config["organization"].(string)
+	if org == "" {
+		return "", "", "", "", false
+	}
+
+	hostname, _ = cfg.Config["hostname"].(string)
+	if hostname == "" {
+		hostname = "app.terraform.io"
+	}
+
+	workspace, ok = tfeWorkspaceName(cfg)
+	if !ok {
+		return "", "", "", "", false
+	}
+
+	token = tfeToken(hostname, cfg.Config)
+	if token == "" {
+		return "", "", "", "", false
+	}
+
+	return hostname, org, workspace, token, true
 }
 
 // tfeWorkspaceName resolves the target TFC/TFE workspace name from the

@@ -86,6 +86,33 @@ func TestPeekConsulLockInfo_Locked(t *testing.T) {
 	}
 }
 
+func TestConsulLockTarget(t *testing.T) {
+	cases := []struct {
+		name      string
+		cfg       map[string]any
+		workspace string
+		want      string
+		wantOK    bool
+	}{
+		{"missing path", map[string]any{}, "default", "", false},
+		{"lock disabled", map[string]any{"path": "terraform/state", "lock": false}, "default", "", false},
+		{"default workspace", map[string]any{"path": "terraform/state"}, "default", "terraform/state", true},
+		{"non-default workspace", map[string]any{"path": "terraform/state"}, "staging", "terraform/state-env:staging", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := testBackendConfigWithType("consul", c.cfg, c.workspace)
+			got, ok := consulLockTarget(cfg)
+			if ok != c.wantOK {
+				t.Fatalf("consulLockTarget() ok = %v, want %v", ok, c.wantOK)
+			}
+			if ok && got != c.want {
+				t.Errorf("consulLockTarget() = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
 func TestConsulChecker_Peek_LockDisabled(t *testing.T) {
 	c := consulChecker{}
 	cfg := testBackendConfig(map[string]any{"path": "terraform/state", "lock": false})

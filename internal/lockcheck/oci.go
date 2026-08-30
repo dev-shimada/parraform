@@ -42,10 +42,28 @@ const (
 type ociChecker struct{}
 
 func (ociChecker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bool, error) {
-	bucket, _ := cfg.Config["bucket"].(string)
-	namespace, _ := cfg.Config["namespace"].(string)
-	if bucket == "" || namespace == "" {
+	bucket, namespace, lockObject, ok := ociLockTarget(cfg)
+	if !ok {
 		return Info{}, false, nil
+	}
+
+	client, err := ociClient(cfg.Config)
+	if err != nil {
+		return Info{}, false, err
+	}
+
+	return peekOCILockObject(ctx, client, namespace, bucket, lockObject)
+}
+
+// ociLockTarget resolves the bucket, namespace, and workspace-qualified
+// lock object name from raw backend config, so the config-to-identifier
+// wiring itself can be exercised directly with a backendcfg.Config,
+// workspace included.
+func ociLockTarget(cfg backendcfg.Config) (bucket, namespace, lockObject string, ok bool) {
+	bucket, _ = cfg.Config["bucket"].(string)
+	namespace, _ = cfg.Config["namespace"].(string)
+	if bucket == "" || namespace == "" {
+		return "", "", "", false
 	}
 	key, _ := cfg.Config["key"].(string)
 	if key == "" {
@@ -55,15 +73,7 @@ func (ociChecker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bool, 
 	if prefix == "" {
 		prefix = ociDefaultWorkspaceKeyPrefix
 	}
-
-	lockObject := ociLockObjectName(prefix, cfg.Workspace, key)
-
-	client, err := ociClient(cfg.Config)
-	if err != nil {
-		return Info{}, false, err
-	}
-
-	return peekOCILockObject(ctx, client, namespace, bucket, lockObject)
+	return bucket, namespace, ociLockObjectName(prefix, cfg.Workspace, key), true
 }
 
 // ociLockObjectName reproduces terraform's oci backend Backend.path() +
