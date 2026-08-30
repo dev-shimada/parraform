@@ -8,7 +8,16 @@
 
 ## インストール
 
+### Homebrew
+
+```sh
+brew tap dev-shimada/parraform
+brew install parraform
 ```
+
+### Go
+
+```sh
 go install github.com/dev-shimada/parraform/cmd/parraform@latest
 ```
 
@@ -101,7 +110,14 @@ terraformのremote stateとして設定可能な全11種別（`local`除く）�
 ```
 go build ./...
 go test ./...
+golangci-lint run ./...
 ```
+
+CIはpush/pull requestのたびに同じ3つのチェックを実行する（build/testは
+Linux/macOS/Windowsの3プラットフォーム）。リリースは`v*`タグをpushすると
+[GoReleaser](https://goreleaser.com/)がビルドしてGitHub Releasesと
+[homebrew-parraform](https://github.com/dev-shimada/homebrew-parraform)
+tapに公開する。
 
 設計判断の詳細（各backendのソース検証結果、既知の制約、採用/不採用にした
 ライブラリとその理由など）は [DESIGN.md](./DESIGN.md)（英語）/

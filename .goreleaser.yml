@@ -1,0 +1,62 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# vim: set ts=2 sw=2 tw=0 fo=cnqoj
+
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: ./cmd/parraform
+    binary: parraform
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+release:
+  footer: >-
+
+    ---
+
+    Released by [GoReleaser](https://github.com/goreleaser/goreleaser).
+
+homebrew_casks:
+  - name: "{{ .ProjectName }}"
+    description: "A transparent terraform wrapper that peeks locks instead of acquiring them at plan time"
+    homepage: "https://github.com/dev-shimada/{{ .ProjectName }}"
+
+    repository:
+      owner: dev-shimada
+      name: homebrew-{{ .ProjectName }}
+      branch: "{{ .ProjectName }}"
+      token: "{{ .Env.PRIVATE_GITHUB_TOKEN }}"
+
+      pull_request:
+        enabled: true
+        draft: false
+        base:
+          branch: main
+
+    binaries:
+      - "{{ .ProjectName }}"

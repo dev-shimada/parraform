@@ -9,7 +9,16 @@ like normal terraform and keeps the usual locking in place.
 
 ## Install
 
+### Homebrew
+
+```sh
+brew tap dev-shimada/parraform
+brew install parraform
 ```
+
+### Go
+
+```sh
 go install github.com/dev-shimada/parraform/cmd/parraform@latest
 ```
 
@@ -105,7 +114,14 @@ known limitations (including the exact scope of supported auth methods).
 ```
 go build ./...
 go test ./...
+golangci-lint run ./...
 ```
+
+CI runs the same three checks (across Linux/macOS/Windows for build/test)
+on every push and pull request; releases are cut by pushing a `v*` tag,
+which [GoReleaser](https://goreleaser.com/) builds and publishes to GitHub
+Releases and the [homebrew-parraform](https://github.com/dev-shimada/homebrew-parraform)
+tap.
 
 Design rationale — per-backend source verification results, known
 limitations, and which libraries were adopted/rejected and why — is in
