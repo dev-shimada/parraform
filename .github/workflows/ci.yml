@@ -38,3 +38,23 @@ jobs:
           cache: true
 
       - uses: golangci/golangci-lint-action@d583c34f0599d37dbac4a198b9c83201be380893 # v9.3.0
+        with:
+          args: --build-tags=integration
+
+  integration-test:
+    # Docker-based; ubuntu-latest ships docker preinstalled. PARRAFORM_
+    # REQUIRE_DOCKER turns a missing docker or failed container start into a
+    # hard failure here instead of the tests' local-dev default of quietly
+    # skipping, so this job can't go green without actually exercising them.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - run: go test -tags=integration ./... -v
+        env:
+          PARRAFORM_REQUIRE_DOCKER: "1"

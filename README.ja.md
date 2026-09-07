@@ -110,8 +110,20 @@ go test ./...
 golangci-lint run ./...
 ```
 
+S3バックエンドのロックチェッカーには、実際のS3/DynamoDB互換サーバー
+（[ministack](https://github.com/ministackorg/ministack)）を使った
+docker統合テストが追加で用意されている。`integration`ビルドタグの裏に
+置いてあるため、上記のコマンドではdockerを一切必要としない:
+
+```
+go test -tags=integration ./internal/lockcheck/... -run TestS3Integration -v
+```
+
+dockerが未インストールの場合はテスト自体が自動的にスキップされる。
+
 CIはpush/pull requestのたびに同じ3つのチェックを実行する（build/testは
-Linux/macOS/Windowsの3プラットフォーム）。リリースは`v*`タグをpushすると
+Linux/macOS/Windowsの3プラットフォーム）に加え、LinuxではS3統合テストも
+実行する。リリースは`v*`タグをpushすると
 [GoReleaser](https://goreleaser.com/)がビルドしてGitHub Releasesと
 [homebrew-parraform](https://github.com/dev-shimada/homebrew-parraform)
 tapに公開する。
