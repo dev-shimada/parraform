@@ -42,10 +42,11 @@ jobs:
           args: --build-tags=integration
 
   integration-test:
-    # Docker-based; ubuntu-latest ships docker preinstalled. PARRAFORM_
-    # REQUIRE_DOCKER turns a missing docker or failed container start into a
-    # hard failure here instead of the tests' local-dev default of quietly
-    # skipping, so this job can't go green without actually exercising them.
+    # Docker- and terraform-based; ubuntu-latest ships docker preinstalled.
+    # PARRAFORM_REQUIRE_DOCKER turns a missing docker/terraform or a failed
+    # container start into a hard failure here instead of the tests'
+    # local-dev default of quietly skipping, so this job can't go green
+    # without actually exercising them.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -54,6 +55,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
 
       - run: go test -tags=integration ./... -v
         env:

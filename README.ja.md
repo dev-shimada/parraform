@@ -110,20 +110,34 @@ go test ./...
 golangci-lint run ./...
 ```
 
-S3バックエンドのロックチェッカーには、実際のS3/DynamoDB互換サーバー
-（[ministack](https://github.com/ministackorg/ministack)）を使った
-docker統合テストが追加で用意されている。`integration`ビルドタグの裏に
-置いてあるため、上記のコマンドではdockerを一切必要としない:
+docker を使ったテストが2種類用意されている。どちらも`integration`ビルド
+タグの裏に置いてあるため、上記のコマンドではdockerもterraformバイナリも
+一切必要としない:
 
-```
-go test -tags=integration ./internal/lockcheck/... -run TestS3Integration -v
-```
+- S3バックエンドのロックチェッカーには、実際のS3/DynamoDB互換サーバー
+  （[ministack](https://github.com/ministackorg/ministack)）を使った統合
+  テストがある:
 
-dockerが未インストールの場合はテスト自体が自動的にスキップされる。
+  ```
+  go test -tags=integration ./internal/lockcheck/... -run TestS3Integration -v
+  ```
+
+- 実際の`parraform`バイナリをビルドし、実際の`terraform`バイナリと
+  ministackに対して動かすE2Eテストがある。実terraformの`plan`は保持中の
+  state lockでブロックされる一方、`parraform plan`はブロックされないこと、
+  さらに`parraform plan`を多数同時実行してもロックを取り合わないことを
+  検証している:
+
+  ```
+  go test -tags=integration ./cmd/parraform/ -run TestE2E -v
+  ```
+
+いずれもdocker（E2Eテストはterraformも）が未インストールの場合は自動的に
+スキップされる。
 
 CIはpush/pull requestのたびに同じ3つのチェックを実行する（build/testは
-Linux/macOS/Windowsの3プラットフォーム）に加え、LinuxではS3統合テストも
-実行する。リリースは`v*`タグをpushすると
+Linux/macOS/Windowsの3プラットフォーム）に加え、Linuxでは上記2つの統合
+テストも実行する。リリースは`v*`タグをpushすると
 [GoReleaser](https://goreleaser.com/)がビルドしてGitHub Releasesと
 [homebrew-parraform](https://github.com/dev-shimada/homebrew-parraform)
 tapに公開する。

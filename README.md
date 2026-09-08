@@ -114,19 +114,31 @@ go test ./...
 golangci-lint run ./...
 ```
 
-The S3 backend's lock checker additionally has a docker-based integration
-test against a real S3/DynamoDB-compatible server
-([ministack](https://github.com/ministackorg/ministack)), gated behind the
-`integration` build tag so the commands above never need docker:
+Two kinds of docker-based tests, both gated behind the `integration` build
+tag so the commands above never need docker or a terraform binary:
 
-```
-go test -tags=integration ./internal/lockcheck/... -run TestS3Integration -v
-```
+- The S3 backend's lock checker has an integration test against a real
+  S3/DynamoDB-compatible server ([ministack](https://github.com/ministackorg/ministack)):
 
-It skips itself if docker isn't installed.
+  ```
+  go test -tags=integration ./internal/lockcheck/... -run TestS3Integration -v
+  ```
+
+- An end-to-end test builds the actual `parraform` binary and runs it
+  against a real `terraform` binary and ministack, confirming that a real
+  `terraform plan` gets blocked by a held state lock while `parraform plan`
+  does not — and that many concurrent `parraform plan` runs never contend
+  for the lock at all:
+
+  ```
+  go test -tags=integration ./cmd/parraform/ -run TestE2E -v
+  ```
+
+Both skip themselves if docker (or, for the E2E test, terraform) isn't
+installed.
 
 CI runs the same three checks (across Linux/macOS/Windows for build/test)
-on every push and pull request, plus the S3 integration test on Linux;
+on every push and pull request, plus both integration tests on Linux;
 releases are cut by pushing a `v*` tag,
 which [GoReleaser](https://goreleaser.com/) builds and publishes to GitHub
 Releases and the [homebrew-parraform](https://github.com/dev-shimada/homebrew-parraform)
