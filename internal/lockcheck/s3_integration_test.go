@@ -47,7 +47,7 @@ const ministackImage = "ministackorg/ministack@sha256:d865b1e43b0b1a7e6f246e1a46
 
 // startMinistack starts a ministack container exposing S3 and DynamoDB on
 // one emulated endpoint and returns that endpoint's base URL (e.g.
-// "http://192.168.1.220:32769"). The container is force-removed via
+// "http://127.0.0.1:32769"). The container is force-removed via
 // t.Cleanup. If docker isn't installed or the container fails to start,
 // this skips the test unless PARRAFORM_REQUIRE_DOCKER is set, in which case
 // it fails it instead.
