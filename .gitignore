@@ -1,0 +1,5 @@
+/parraform
+*.exe
+/dist/
+/.claude/DESIGN.md
+/.claude/DESIGN.ja.md
