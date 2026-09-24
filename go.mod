@@ -20,7 +20,7 @@ require (
 	github.com/oracle/oci-go-sdk/v65 v65.124.0
 	github.com/spf13/cobra v1.10.2
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.75
-	google.golang.org/api v0.295.0
+	google.golang.org/api v0.298.0
 	k8s.io/api v0.37.0
 	k8s.io/apimachinery v0.37.0
 	k8s.io/client-go v0.37.0
