@@ -25,10 +25,11 @@ import (
 // invoked as a subprocess) against a real terraform binary and a real
 // S3-compatible server (ministack, https://github.com/ministackorg/ministack),
 // closing a gap the rest of the test suite leaves open: main_test.go only
-// unit-tests peekWithTimeout in isolation, so nothing before this exercised
-// warnIfLocked/runTerraform -- and by extension TF_CLI_ARGS_plan injection,
-// backend discovery, and the lock-check warning -- wired together end to
-// end through a real "parraform plan" invocation.
+// unit-tests peekWithTimeout and decideLockAction in isolation, so nothing
+// before this exercised checkLock/peekLock/runTerraform -- and by extension
+// TF_CLI_ARGS_plan injection, backend discovery, and the lock-check warning
+// and strict refusal -- wired together end to end through a real
+// "parraform plan" invocation.
 //
 // The state lock is planted directly as an S3 object (mirroring exactly
 // what a genuinely in-flight "apply" would have written) rather than by
@@ -300,6 +301,50 @@ func TestE2E_PlanAndTheStateLock(t *testing.T) {
 			t.Errorf("plan took %v against a locked state, want well under %v (it must not block waiting on the lock)", elapsed, bound)
 		}
 		t.Logf("plan completed in %v despite the held lock", elapsed)
+	})
+
+	t.Run("unlocked: parraform plan with -lock-check=strict still succeeds (flag is stripped, never reaches terraform)", func(t *testing.T) {
+		out, _, err := runParraform(t, parraformBin, "plan", "-lock-timeout=0s", "-lock-check=strict")
+		if err != nil {
+			t.Fatalf("parraform plan failed: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "No changes.") {
+			t.Errorf("expected a successful plan, got:\n%s", out)
+		}
+	})
+
+	t.Run("locked: parraform plan with -lock-check=strict refuses without invoking terraform", func(t *testing.T) {
+		plantLock(t)
+		defer clearLock(t)
+
+		out, elapsed, err := runParraform(t, parraformBin, "plan", "-lock-timeout=0s", "-lock-check=strict")
+		if err == nil {
+			t.Fatalf("expected parraform plan to fail under -lock-check=strict against a locked state, it succeeded:\n%s", out)
+		}
+		if !strings.Contains(out, "state lock is currently held (holder: e2e-test@ci)") {
+			t.Errorf("expected the refusal to name the holder, got:\n%s", out)
+		}
+		if strings.Contains(out, "No changes.") {
+			t.Errorf("plan must not have run at all under -lock-check=strict, got:\n%s", out)
+		}
+		const bound = 10 * time.Second
+		if elapsed > bound {
+			t.Errorf("refusal took %v, want well under %v (it must fail fast, before even attempting terraform)", elapsed, bound)
+		}
+		t.Logf("plan refused in %v", elapsed)
+	})
+
+	t.Run("invalid -lock-check value is a parraform-level usage error, not a terraform one", func(t *testing.T) {
+		out, _, err := runParraform(t, parraformBin, "plan", "-lock-timeout=0s", "-lock-check=bogus")
+		if err == nil {
+			t.Fatalf("expected parraform plan to fail on an invalid -lock-check value, it succeeded:\n%s", out)
+		}
+		if !strings.Contains(out, `invalid -lock-check value "bogus"`) {
+			t.Errorf("expected a parraform usage error naming the bad value, got:\n%s", out)
+		}
+		if strings.Contains(out, "No changes.") {
+			t.Errorf("plan must not have run at all on an invalid -lock-check value, got:\n%s", out)
+		}
 	})
 
 	t.Run("locked: N concurrent parraform plans all succeed without contending", func(t *testing.T) {

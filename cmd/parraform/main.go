@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -28,8 +29,10 @@ func main() {
 }
 
 // runTerraform execs the real terraform binary with argv untouched, except
-// that for "plan" it injects TF_CLI_ARGS_plan=-lock=false. It does not
-// return on success.
+// that for "plan" it injects TF_CLI_ARGS_plan=-lock=false and strips its own
+// "-lock-check" flag (see LockCheckMode) before terraform ever sees argv --
+// terraform has no such flag and would reject it. It does not return on
+// success.
 func runTerraform(argv []string) error {
 	bin, err := tfbin.Resolve()
 	if err != nil {
@@ -38,14 +41,18 @@ func runTerraform(argv []string) error {
 
 	env := os.Environ()
 	if tfargs.Subcommand(argv) == "plan" {
-		warnIfLocked(argv)
+		mode, present, rest := tfargs.LockCheckMode(argv)
+		argv = rest
+		if err := checkLock(os.Stderr, argv, mode, present); err != nil {
+			return err
+		}
 		env = tfargs.PlanEnv(env)
 	}
 
 	return execwrap.Run(bin, append([]string{bin}, argv...), env)
 }
 
-// defaultLockCheckTimeout bounds how long warnIfLocked will wait on a
+// defaultLockCheckTimeout bounds how long peekLock will wait on a
 // backend peek (credential resolution for a cloud SDK's default chain can
 // itself take seconds, e.g. IMDS probing or DefaultAzureCredential walking
 // its fallback list) before giving up silently. This is real latency added
@@ -56,13 +63,65 @@ func runTerraform(argv []string) error {
 // hatch.
 const defaultLockCheckTimeout = 3 * time.Second
 
-// warnIfLocked performs a best-effort, read-only peek at the configured
-// backend's lock and prints a warning if it's currently held. It never
-// blocks plan and any failure here is silently ignored: the check is purely
-// informational, not a gate. This means a timeout or a peek error is
-// indistinguishable from "unlocked" to the user — an accepted trade-off,
-// see DESIGN.md.
-func warnIfLocked(argv []string) {
+// lockCheckWarn and lockCheckStrict are the two -lock-check modes. warn (the
+// default, used when the flag isn't given) prints a warning to stderr and
+// proceeds; strict refuses to run plan at all when the lock is confirmed
+// held. Neither mode ever blocks on mere uncertainty in the peek itself
+// (unsupported backend, timeout, peek error) — see peekLock.
+const (
+	lockCheckWarn   = "warn"
+	lockCheckStrict = "strict"
+)
+
+// checkLock is runTerraform's plan-only lock gate: it peeks at the backend
+// lock (see peekLock) and turns the result into actual behavior via
+// decideLockAction. present distinguishes an explicit-but-empty
+// "-lock-check=" from the flag not being given at all, so the former is
+// rejected instead of silently defaulting to warn.
+func checkLock(w io.Writer, argv []string, mode string, present bool) error {
+	if mode == "" && !present {
+		mode = lockCheckWarn
+	}
+	info, locked := peekLock(argv)
+	return decideLockAction(w, mode, info, locked)
+}
+
+// decideLockAction turns a peek result into runTerraform's actual behavior.
+// A confirmed lock (locked=true) prints a warning and proceeds under
+// lockCheckWarn, or refuses to run plan under lockCheckStrict. locked=false
+// always proceeds silently in both modes. An unrecognized (including empty)
+// mode is a usage error, checked before consulting the peek result at all so
+// a typo is never masked by an unlocked backend.
+func decideLockAction(w io.Writer, mode string, info lockcheck.Info, locked bool) error {
+	if mode != lockCheckWarn && mode != lockCheckStrict {
+		return fmt.Errorf("invalid -lock-check value %q (want %q or %q)", mode, lockCheckWarn, lockCheckStrict)
+	}
+	if !locked {
+		return nil
+	}
+
+	who := info.Who
+	if who == "" {
+		who = "unknown"
+	}
+
+	if mode == lockCheckStrict {
+		return fmt.Errorf("state lock is currently held (holder: %s); refusing to run plan (-lock-check=strict)", who)
+	}
+
+	_, _ = fmt.Fprintf(w,
+		"parraform: warning: state lock is currently held (holder: %s) — running plan unlocked against a possibly-changing state\n",
+		who)
+	return nil
+}
+
+// peekLock performs a best-effort, read-only peek at the configured
+// backend's lock. It returns locked=true only when the peek definitively
+// observed a held lock; any uncertainty (missing cache file, unsupported
+// backend, timeout, or peek error) returns locked=false, matching the
+// project's fail-open philosophy — checkLock's strict mode only ever blocks
+// on a *confirmed* lock, never on doubt (see DESIGN.md).
+func peekLock(argv []string) (info lockcheck.Info, locked bool) {
 	timeout := defaultLockCheckTimeout
 	if raw := os.Getenv("PARRAFORM_LOCK_CHECK_TIMEOUT"); raw != "" {
 		if d, err := time.ParseDuration(raw); err == nil {
@@ -70,12 +129,12 @@ func warnIfLocked(argv []string) {
 		}
 	}
 	if timeout <= 0 {
-		return
+		return lockcheck.Info{}, false
 	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
-		return
+		return lockcheck.Info{}, false
 	}
 
 	dir := cwd
@@ -89,26 +148,19 @@ func warnIfLocked(argv []string) {
 
 	cfg, err := backendcfg.Discover(dir)
 	if err != nil || cfg == nil {
-		return
+		return lockcheck.Info{}, false
 	}
 
 	checker, ok := lockcheck.For(cfg.Type)
 	if !ok {
-		return
+		return lockcheck.Info{}, false
 	}
 
-	info, supported, err := peekWithTimeout(checker, *cfg, timeout)
-	if err != nil || !supported || !info.Locked {
-		return
+	result, supported, err := peekWithTimeout(checker, *cfg, timeout)
+	if err != nil || !supported || !result.Locked {
+		return lockcheck.Info{}, false
 	}
-
-	who := info.Who
-	if who == "" {
-		who = "unknown"
-	}
-	fmt.Fprintf(os.Stderr,
-		"parraform: warning: state lock is currently held (holder: %s) — running plan unlocked against a possibly-changing state\n",
-		who)
+	return result, true
 }
 
 // peekWithTimeout enforces timeout even when checker.Peek doesn't honor
