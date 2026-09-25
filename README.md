@@ -39,6 +39,40 @@ parraform apply tfplan
 You can also drop it onto `PATH` under the name `terraform` in CI, so existing
 pipelines pick it up without any config changes.
 
+### Lock-check mode
+
+`plan`'s backend lock peek (see [What it does](#what-it-does)) defaults to
+printing a warning and proceeding when the lock is held. Pass
+`-lock-check=strict` to refuse running `plan` at all instead, exiting 1
+before terraform is ever invoked:
+
+```
+parraform plan -lock-check=strict
+```
+
+`-lock-check` is parraform's own flag, not terraform's — it's stripped from
+the arguments before the real `terraform` binary runs, so terraform never
+sees it and never rejects it as unrecognized. It's only meaningful for
+`plan`, accepts `warn` (the default) or `strict`, and — like `-lock` — may
+appear anywhere among the command's arguments.
+
+| `-lock-check` | Lock held? | Result |
+|---|---|---|
+| `warn` (default) | no | plan runs |
+| `warn` (default) | yes | plan runs; warning printed to stderr |
+| `strict` | no | plan runs |
+| `strict` | yes | plan refuses to run; exits 1, no terraform invocation |
+
+This is independent of `-lock`: an explicit `-lock=true` still makes
+terraform itself attempt to acquire the lock as usual (and fail if it's
+held), but parraform's own `-lock-check` peek runs first regardless and
+applies the table above on its own.
+
+The underlying peek is best-effort: an unsupported backend, a timed-out or
+failed peek, or `PARRAFORM_LOCK_CHECK_TIMEOUT` set to `0` or below (which
+disables it) all mean "no confirmed lock" — so `strict` only ever blocks on
+a lock it actually observed, never on mere uncertainty.
+
 ### Shell completion
 
 Being cobra-based, it can generate completion scripts for bash/zsh/fish/powershell.
@@ -54,7 +88,9 @@ parraform completion bash > /etc/bash_completion.d/parraform
   command line still takes precedence.
 - Before running `plan`, it performs a read-only peek at the configured
   backend's actual lock state and prints a warning if another process holds
-  it — without ever blocking `plan` itself.
+  it. By default this never blocks `plan` itself; passing
+  `-lock-check=strict` makes it refuse to run `plan` instead when the lock
+  is confirmed held — see [Lock-check mode](#lock-check-mode).
 - `apply` / `import` / `refresh` / `state mv` and every other command that
   writes state pass through completely unmodified, keeping terraform's normal
   locking and checks.
@@ -77,7 +113,10 @@ plan that read a slightly stale state fails closed at apply time rather than
 silently applying against outdated assumptions.
 
 The backend lock peek adds one more signal on top of that — letting you know
-an `apply` is in flight — without ever gating `plan` itself.
+an `apply` is in flight. By default it never gates `plan` itself, though
+`-lock-check=strict` opts into exactly that (see
+[Lock-check mode](#lock-check-mode)) for cases where you'd rather fail fast
+and retry than run against a state that might be about to change.
 
 ## Backends the lock check supports
 

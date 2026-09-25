@@ -33,6 +33,55 @@ func Chdir(args []string) string {
 	return ""
 }
 
+// LockCheckMode scans args for a "-lock-check" flag, accepting every form
+// Go's flag package (which terraform itself is built on) recognizes:
+// "-lock-check=MODE", "--lock-check=MODE", "-lock-check MODE", and
+// "--lock-check MODE". Unlike -lock=BOOL, "-lock-check" is parraform's own
+// invention that terraform doesn't recognize at all, so every occurrence --
+// and its value, if space-separated -- is stripped from the returned args
+// regardless of where it appears, mirroring how -lock=BOOL itself may
+// appear anywhere among a plan's arguments (unlike -chdir, which must
+// precede the subcommand).
+//
+// present distinguishes "not given" (mode "", present false) from "given
+// with an empty or missing value" (-lock-check=, or a bare -lock-check at
+// the end of args; mode "", present true), so callers can reject those
+// explicitly instead of silently treating them as the unset default.
+func LockCheckMode(args []string) (mode string, present bool, rest []string) {
+	rest = make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if v, ok := cutLockCheckValue(a); ok {
+			mode, present = v, true
+			continue
+		}
+		if isLockCheckFlag(a) {
+			present = true
+			if i+1 < len(args) {
+				i++
+				mode = args[i]
+			}
+			continue
+		}
+		rest = append(rest, a)
+	}
+	return mode, present, rest
+}
+
+func cutLockCheckValue(a string) (string, bool) {
+	if v, ok := strings.CutPrefix(a, "--lock-check="); ok {
+		return v, true
+	}
+	if v, ok := strings.CutPrefix(a, "-lock-check="); ok {
+		return v, true
+	}
+	return "", false
+}
+
+func isLockCheckFlag(a string) bool {
+	return a == "-lock-check" || a == "--lock-check"
+}
+
 const planLockFalse = "-lock=false"
 
 // PlanEnv returns env (typically os.Environ()) with -lock=false appended to
