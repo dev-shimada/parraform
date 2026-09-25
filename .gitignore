@@ -1,5 +1,6 @@
 /parraform
 *.exe
 /dist/
+/custom-gcl
 /.claude/DESIGN.md
 /.claude/DESIGN.ja.md

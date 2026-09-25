@@ -89,6 +89,9 @@ func TestDiscover_WorkspaceDefaultWhenEnvironmentFileAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}
+	if cfg == nil {
+		t.Fatal("Discover() returned nil config")
+	}
 	if cfg.Workspace != "default" {
 		t.Errorf("Workspace = %q, want %q (no .terraform/environment file)", cfg.Workspace, "default")
 	}
@@ -106,6 +109,9 @@ func TestDiscover_WorkspaceFromEnvironmentFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}
+	if cfg == nil {
+		t.Fatal("Discover() returned nil config")
+	}
 	if cfg.Workspace != "staging" {
 		t.Errorf("Workspace = %q, want %q (trimmed .terraform/environment content)", cfg.Workspace, "staging")
 	}
@@ -122,6 +128,9 @@ func TestDiscover_TFWorkspaceEnvOverridesEnvironmentFile(t *testing.T) {
 	cfg, err := Discover(dir)
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("Discover() returned nil config")
 	}
 	if cfg.Workspace != "production" {
 		t.Errorf("Workspace = %q, want %q (TF_WORKSPACE must win over the environment file)", cfg.Workspace, "production")
