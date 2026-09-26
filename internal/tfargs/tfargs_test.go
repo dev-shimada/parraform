@@ -116,4 +116,73 @@ func TestPlanEnv(t *testing.T) {
 			t.Errorf("input slice was mutated: %v", in)
 		}
 	})
+
+	t.Run("existing value with no lock-check flag is carried through byte-for-byte, quoting included", func(t *testing.T) {
+		in := []string{`TF_CLI_ARGS_plan=-var-file="a b.tfvars"`}
+		got := PlanEnv(in)
+		want := []string{`TF_CLI_ARGS_plan=-var-file="a b.tfvars" -lock=false`}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("PlanEnv(%v) = %v, want %v", in, got, want)
+		}
+	})
+
+	t.Run("strips a lock-check flag out of the existing value", func(t *testing.T) {
+		in := []string{"TF_CLI_ARGS_plan=-var-file=x.tfvars -lock-check=strict"}
+		got := PlanEnv(in)
+		want := []string{"TF_CLI_ARGS_plan=-var-file=x.tfvars -lock=false"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("PlanEnv(%v) = %v, want %v", in, got, want)
+		}
+	})
+}
+
+func TestLockCheckModeFromPlanEnv(t *testing.T) {
+	cases := []struct {
+		name        string
+		env         []string
+		wantMode    string
+		wantPresent bool
+	}{
+		{"no TF_CLI_ARGS_plan at all", []string{"PATH=/bin"}, "", false},
+		{"TF_CLI_ARGS_plan without the flag", []string{"TF_CLI_ARGS_plan=-var-file=x.tfvars"}, "", false},
+		{"equals form", []string{"TF_CLI_ARGS_plan=-lock-check=strict"}, "strict", true},
+		{"space form among other flags", []string{"TF_CLI_ARGS_plan=-var-file=x.tfvars -lock-check strict"}, "strict", true},
+		{"a quoted argument elsewhere in the value doesn't confuse detection", []string{`TF_CLI_ARGS_plan=-var-file="a b.tfvars" -lock-check=strict`}, "strict", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			mode, present := LockCheckModeFromPlanEnv(c.env)
+			if mode != c.wantMode || present != c.wantPresent {
+				t.Errorf("LockCheckModeFromPlanEnv(%v) = (%q, %v), want (%q, %v)", c.env, mode, present, c.wantMode, c.wantPresent)
+			}
+		})
+	}
+}
+
+func TestLockOverride(t *testing.T) {
+	cases := []struct {
+		name      string
+		args      []string
+		wantExpl  bool
+		wantValue bool
+	}{
+		{"not given", []string{"plan"}, false, false},
+		{"explicit true via equals", []string{"plan", "-lock=true"}, true, true},
+		{"explicit false via equals", []string{"plan", "-lock=false"}, true, false},
+		{"double-dash equals", []string{"plan", "--lock=true"}, true, true},
+		{"bare flag means true", []string{"plan", "-lock"}, true, true},
+		{"bare double-dash flag means true", []string{"plan", "--lock"}, true, true},
+		{"lock-timeout must not be mistaken for lock", []string{"plan", "-lock-timeout=0s"}, false, false},
+		{"lock-timeout alongside a real explicit -lock", []string{"plan", "-lock-timeout=0s", "-lock=true"}, true, true},
+		{"unparseable value is ignored", []string{"plan", "-lock=maybe"}, false, false},
+		{"last occurrence wins", []string{"plan", "-lock=true", "-lock=false"}, true, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			explicit, value := LockOverride(c.args)
+			if explicit != c.wantExpl || (explicit && value != c.wantValue) {
+				t.Errorf("LockOverride(%v) = (%v, %v), want (%v, %v)", c.args, explicit, value, c.wantExpl, c.wantValue)
+			}
+		})
+	}
 }

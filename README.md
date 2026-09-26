@@ -76,9 +76,21 @@ appear anywhere among the command's arguments.
 | `strict` | yes | plan refuses to run; exits 1, no terraform invocation |
 
 This is independent of `-lock`: an explicit `-lock=true` still makes
-terraform itself attempt to acquire the lock as usual (and fail if it's
-held), but parraform's own `-lock-check` peek runs first regardless and
-applies the table above on its own.
+terraform itself attempt to acquire the lock as usual (and wait out
+`-lock-timeout` if one is set, rather than failing immediately), but
+parraform's own `-lock-check` peek runs first regardless and applies the
+table above on its own. When the lock is held and `-lock-check=warn` (the
+default) lets plan through, the warning's wording adjusts for this case —
+it won't claim plan is running unlocked when you explicitly asked for the
+opposite.
+
+If you're running parraform as a drop-in `terraform` replacement somewhere
+that only lets you set environment variables, not add CLI flags (Atlantis,
+terragrunt), `-lock-check` can also be given through `TF_CLI_ARGS_plan`
+itself, e.g. `TF_CLI_ARGS_plan=-lock-check=strict`. It's stripped out of
+that variable the same way, for the same reason. A `-lock-check` given
+directly on the command line always takes precedence over one found in
+`TF_CLI_ARGS_plan`.
 
 The underlying peek is best-effort: an unsupported backend, a timed-out or
 failed peek, or `PARRAFORM_LOCK_CHECK_TIMEOUT` set to `0` or below (which

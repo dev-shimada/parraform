@@ -31,7 +31,11 @@ func main() {
 // runTerraform execs the real terraform binary with argv untouched, except
 // that for "plan" it injects TF_CLI_ARGS_plan=-lock=false and strips its own
 // "-lock-check" flag (see LockCheckMode) before terraform ever sees argv --
-// terraform has no such flag and would reject it. It does not return on
+// terraform has no such flag and would reject it. -lock-check may also be
+// given via TF_CLI_ARGS_plan itself (see LockCheckModeFromPlanEnv), for
+// callers running parraform as a drop-in "terraform" that can't add CLI
+// flags directly (e.g. under Atlantis or terragrunt); an explicit argv flag
+// always takes precedence over that fallback. It does not return on
 // success.
 func runTerraform(argv []string) error {
 	bin, err := tfbin.Resolve()
@@ -43,6 +47,9 @@ func runTerraform(argv []string) error {
 	if tfargs.Subcommand(argv) == "plan" {
 		mode, present, rest := tfargs.LockCheckMode(argv)
 		argv = rest
+		if !present {
+			mode, present = tfargs.LockCheckModeFromPlanEnv(env)
+		}
 		if err := checkLock(os.Stderr, argv, mode, present); err != nil {
 			return err
 		}
@@ -83,7 +90,8 @@ func checkLock(w io.Writer, argv []string, mode string, present bool) error {
 		mode = lockCheckWarn
 	}
 	info, locked := peekLock(argv)
-	return decideLockAction(w, mode, info, locked)
+	explicitLock, lockValue := tfargs.LockOverride(argv)
+	return decideLockAction(w, mode, info, locked, explicitLock && lockValue)
 }
 
 // decideLockAction turns a peek result into runTerraform's actual behavior.
@@ -92,7 +100,13 @@ func checkLock(w io.Writer, argv []string, mode string, present bool) error {
 // always proceeds silently in both modes. An unrecognized (including empty)
 // mode is a usage error, checked before consulting the peek result at all so
 // a typo is never masked by an unlocked backend.
-func decideLockAction(w io.Writer, mode string, info lockcheck.Info, locked bool) error {
+//
+// explicitLockTrue is true when the plan's own arguments set an explicit
+// -lock=true (see tfargs.LockOverride), which wins over PlanEnv's injected
+// -lock=false, so terraform will actually attempt to acquire the lock
+// itself once parraform lets plan proceed. The warn-mode message adjusts
+// for this: claiming "running plan unlocked" would be wrong in that case.
+func decideLockAction(w io.Writer, mode string, info lockcheck.Info, locked bool, explicitLockTrue bool) error {
 	if mode != lockCheckWarn && mode != lockCheckStrict {
 		return fmt.Errorf("invalid -lock-check value %q (want %q or %q)", mode, lockCheckWarn, lockCheckStrict)
 	}
@@ -109,9 +123,11 @@ func decideLockAction(w io.Writer, mode string, info lockcheck.Info, locked bool
 		return fmt.Errorf("state lock is currently held (holder: %s); refusing to run plan (-lock-check=strict)", who)
 	}
 
-	_, _ = fmt.Fprintf(w,
-		"parraform: warning: state lock is currently held (holder: %s) — running plan unlocked against a possibly-changing state\n",
-		who)
+	situation := "running plan unlocked against a possibly-changing state"
+	if explicitLockTrue {
+		situation = "plan was run with an explicit -lock=true, so terraform will attempt to acquire the lock itself"
+	}
+	_, _ = fmt.Fprintf(w, "parraform: warning: state lock is currently held (holder: %s) — %s\n", who, situation)
 	return nil
 }
 
