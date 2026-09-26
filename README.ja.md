@@ -47,12 +47,51 @@ go install github.com/dev-shimada/parraform/cmd/parraform@latest
 などと組み合わせて使う。ビルド済みリリースがあるのはLinuxとmacOSの
 runnerのみ。それ以外のrunnerでは`go install`でインストールする。
 
-`hashicorp/setup-terraform`と組み合わせる場合は`terraform_wrapper: false`を
-指定すること。同actionのデフォルト(`true`)は実際のterraformバイナリを
-PATH上で同じ`terraform`という名前の独自Node.js wrapperスクリプトに
-差し替えてしまう。`parraform`が探すのはその名前だけなので、wrapperの方を
-実行してしまうことになる。実際に確認したところ、`-detailed-exitcode`の
-exit code `2`(差分あり)が黙って`0`に潰されていた。
+> [!CAUTION]
+> `hashicorp/setup-terraform`と組み合わせる場合、**同action自身の**
+> `terraform_wrapper`入力は常に`false`にすること。stdout/stderr/exit code
+> のキャプチャが必要なら、hashicorpの方ではなく**このaction自身の**
+> `terraform_wrapper: true`を使う(後述)。
+>
+> `parraform`はPATH上で文字通り`terraform`という名前のものにexecする。
+> `hashicorp/setup-terraform`の`terraform_wrapper: true`(デフォルト)は
+> その名前で独自のNode.js wrapperスクリプトを置くので、parraformは実バイナリ
+> ではなくそちらを実行してしまう。execはプロセスの中身をその場で入れ替える
+> 操作のため、これはparraformのプロセスの**内部**で、外からは見えない形で
+> 起きる——このaction自身の`terraform_wrapper: true`を含め、外側の何も
+> 後からこれを検知したり元に戻したりできない。hashicorpのデフォルトの
+> ままだと`-detailed-exitcode`が黙って壊れる: 差分ありを意味する exit code
+> `2`が、生のプロセスexit codeを見る側(parraform自身、素の`$?`チェック、
+> あるいはこのaction自身のwrapperでさえも)から見える時点で`0`になって
+> いる。このaction自身のwrapperを有効にした状態でも実際に確認済み:
+> hashicorp側の潰しはそれより先に無条件で起きるため、parraform側の
+> wrapperでは補正しようがない。
+
+### 出力のキャプチャ(`terraform_wrapper: true`)
+
+```yaml
+- uses: hashicorp/setup-terraform@v3
+  with:
+    terraform_wrapper: false # 上記の注意の通り必須
+
+- uses: dev-shimada/parraform@v0.1.1
+  with:
+    terraform_wrapper: true
+
+- id: plan
+  run: parraform plan -detailed-exitcode
+```
+
+このactionにも`terraform_wrapper`という入力があり、`hashicorp/setup-terraform`
+の同名入力に名前を合わせている——parraform版の相当品で、parraform
+(terraform自体ではなく)をwrapperで包み、stdout・stderr・exit codeを
+`stdout`/`stderr`/`exitcode`というoutputとして(このsetupステップではなく、
+実際にparraformを呼び出した上の`plan`ステップに)公開する。後続ステップから
+`steps.plan.outputs.exitcode`を参照できる。hashicorp側と同様、`0`または`2`の
+どちらでもラップした呼び出し自体は成功扱いになる挙動もそのまま踏襲している
+が、上記の注意の通りhashicorp側のwrapperを無効にしている限り、`exitcode`は
+どちらの場合も実際の値を正しく反映する。デフォルトは`false`
+(`hashicorp/setup-terraform`の同名入力のデフォルト`true`とは異なる)。
 
 terraform実行バイナリはPATHから自動的に見つける。別の場所にあるterraformを
 使いたい場合は `PARRAFORM_TERRAFORM_BIN` で指定する。

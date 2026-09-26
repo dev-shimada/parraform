@@ -21,6 +21,19 @@ inputs:
       rate limits. Defaults to the workflow's own github.token.
     required: false
     default: ${{ github.token }}
+  terraform_wrapper:
+    description: >-
+      Whether to install a wrapper around parraform that captures its
+      stdout, stderr, and exit code as outputs named `stdout`, `stderr`,
+      and `exitcode` -- named to match hashicorp/setup-terraform's own
+      input of the same name, which this is the parraform-side equivalent
+      of. Exit code handling mirrors it too: a real exit code of 0 or 2
+      (changes present, from `-detailed-exitcode`) both make the wrapped
+      call itself succeed, so a later step can branch on
+      `steps.X.outputs.exitcode == '2'`. Defaults to `false`, unlike
+      hashicorp/setup-terraform's own default of `true` for this input.
+    required: false
+    default: "false"
 
 outputs:
   version:
@@ -39,8 +52,15 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github-token }}
         VERSION_INPUT: ${{ inputs.version }}
+        WRAPPER_INPUT: ${{ inputs.terraform_wrapper }}
+        ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
+
+        if [ "$WRAPPER_INPUT" != "true" ] && [ "$WRAPPER_INPUT" != "false" ]; then
+          echo "::error::setup-parraform: invalid terraform_wrapper value '$WRAPPER_INPUT' (want 'true' or 'false')." >&2
+          exit 1
+        fi
 
         case "$RUNNER_OS" in
           Linux) os=Linux ;;
@@ -111,6 +131,12 @@ runs:
 
         tar -xzf "$asset"
         chmod +x parraform
+
+        if [ "$WRAPPER_INPUT" = "true" ]; then
+          mv parraform parraform-bin
+          cp "$ACTION_PATH/wrapper/parraform" parraform
+          chmod +x parraform
+        fi
 
         echo "$install_dir" >> "$GITHUB_PATH"
         echo "version=$tag" >> "$GITHUB_OUTPUT"

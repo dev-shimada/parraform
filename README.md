@@ -49,12 +49,54 @@ parraform only — pair it with
 binary on `PATH`. Only Linux and macOS runners have a prebuilt release to
 download; on other runners, install with `go install` instead.
 
-If you do pair it with `hashicorp/setup-terraform`, pass
-`terraform_wrapper: false`. That action's default (`true`) replaces the real
-terraform binary on `PATH` with its own Node.js wrapper script — still named
-`terraform`, which is all `parraform` looks for — so parraform ends up
-running that wrapper instead. Confirmed in practice: it silently collapses
-`-detailed-exitcode`'s exit code `2` (changes present) down to `0`.
+> [!CAUTION]
+> If you pair this action with `hashicorp/setup-terraform`, always set
+> **its** `terraform_wrapper` input to `false`. If you need
+> stdout/stderr/exit-code capture, use *this* action's own
+> `terraform_wrapper: true` instead (see below) — never hashicorp's.
+>
+> `parraform` execs into whatever is literally named `terraform` on `PATH`.
+> `hashicorp/setup-terraform`'s `terraform_wrapper: true` (its default)
+> installs its own Node.js wrapper under that exact name, so parraform ends
+> up running *that* instead of the real binary. Because `exec` replaces a
+> process's own image in place, this happens *inside* parraform's process,
+> invisibly — nothing on the outside, including this action's own
+> `terraform_wrapper: true`, can detect or undo it after the fact. Left at
+> hashicorp's default, this silently breaks `-detailed-exitcode`: its exit
+> code `2` (changes present) becomes `0` by the time anything watching the
+> real process exit code — parraform itself, a plain `$?` check, or even
+> this action's own wrapper — can see it. Confirmed empirically, including
+> with this action's own wrapper enabled: hashicorp's collapse happens
+> first and unconditionally, so it isn't something parraform's wrapper can
+> compensate for.
+
+### Capturing output (`terraform_wrapper: true`)
+
+```yaml
+- uses: hashicorp/setup-terraform@v3
+  with:
+    terraform_wrapper: false # required -- see the caution above
+
+- uses: dev-shimada/parraform@v0.1.1
+  with:
+    terraform_wrapper: true
+
+- id: plan
+  run: parraform plan -detailed-exitcode
+```
+
+This action has its own `terraform_wrapper` input, named to match
+`hashicorp/setup-terraform`'s input of the same name — it's the
+parraform-side equivalent, installing a wrapper around parraform (not
+terraform itself) that exposes its stdout, stderr, and exit code as outputs
+named `stdout`, `stderr`, and `exitcode` on whichever step actually invokes
+it (the `plan` step above, not this setup step), so a later step can read
+`steps.plan.outputs.exitcode`. It mirrors hashicorp's exit-code handling too
+— `0` or `2` both let the wrapped call succeed — but `exitcode` genuinely
+reflects that either way, as long as hashicorp's own wrapper is disabled
+per the caution above. Defaults to `false`, unlike
+`hashicorp/setup-terraform`'s own default of `true` for its input of the
+same name.
 
 parraform finds the real `terraform` binary on `PATH` automatically. To point
 it at a specific binary instead, set `PARRAFORM_TERRAFORM_BIN`.
