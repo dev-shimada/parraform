@@ -33,6 +33,20 @@ brew install parraform
 go install github.com/dev-shimada/parraform/cmd/parraform@latest
 ```
 
+### GitHub Actions
+
+```yaml
+- uses: dev-shimada/parraform@v0.1.1
+  with:
+    version: v0.1.1 # 省略可。省略時は最新リリースを取得する
+```
+
+ジョブの以降のステップで`parraform`をPATHに追加する。parraformのみを
+インストールするので、実際の`terraform`バイナリも必要な場合は
+[`hashicorp/setup-terraform`](https://github.com/hashicorp/setup-terraform)
+などと組み合わせて使う。ビルド済みリリースがあるのはLinuxとmacOSの
+runnerのみ。それ以外のrunnerでは`go install`でインストールする。
+
 terraform実行バイナリはPATHから自動的に見つける。別の場所にあるterraformを
 使いたい場合は `PARRAFORM_TERRAFORM_BIN` で指定する。
 

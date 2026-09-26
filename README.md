@@ -34,6 +34,21 @@ brew install parraform
 go install github.com/dev-shimada/parraform/cmd/parraform@latest
 ```
 
+### GitHub Actions
+
+```yaml
+- uses: dev-shimada/parraform@v0.1.1
+  with:
+    version: v0.1.1 # optional; defaults to the latest release
+```
+
+This adds `parraform` to `PATH` for the rest of the job. It installs
+parraform only — pair it with
+[`hashicorp/setup-terraform`](https://github.com/hashicorp/setup-terraform)
+(or your own terraform install) if you also need the real `terraform`
+binary on `PATH`. Only Linux and macOS runners have a prebuilt release to
+download; on other runners, install with `go install` instead.
+
 parraform finds the real `terraform` binary on `PATH` automatically. To point
 it at a specific binary instead, set `PARRAFORM_TERRAFORM_BIN`.
 

@@ -1,0 +1,90 @@
+name: Test setup-parraform action
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - action.yml
+      - .github/workflows/test-action.yml
+  pull_request:
+    paths:
+      - action.yml
+      - .github/workflows/test-action.yml
+
+permissions:
+  contents: read
+
+jobs:
+  pinned-version:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./
+        id: setup
+        with:
+          version: v0.0.1
+
+      - shell: bash
+        run: |
+          set -euo pipefail
+          [ "${{ steps.setup.outputs.version }}" = "v0.0.1" ]
+          command -v parraform
+          [ "$(command -v parraform)" = "${{ steps.setup.outputs.parraform-path }}" ]
+
+      # v0.0.1 predates -lock-check, so this only proves the binary runs
+      # and passes "version" straight through to the real terraform.
+      - shell: bash
+        run: parraform version
+
+  pinned-version-without-v-prefix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./
+        id: setup
+        with:
+          version: "0.0.1"
+
+      - shell: bash
+        run: '[ "${{ steps.setup.outputs.version }}" = "v0.0.1" ]'
+
+  latest-version:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./
+        id: setup
+
+      - shell: bash
+        run: |
+          set -euo pipefail
+          [ -n "${{ steps.setup.outputs.version }}" ]
+          command -v parraform
+
+  unsupported-os-fails-clearly:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - id: setup
+        continue-on-error: true
+        uses: ./
+        with:
+          version: v0.0.1
+
+      - shell: pwsh
+        run: |
+          if ("${{ steps.setup.outcome }}" -ne "failure") {
+            Write-Error "expected the action to fail on windows-latest (no prebuilt release), outcome was ${{ steps.setup.outcome }}"
+            exit 1
+          }
