@@ -50,25 +50,7 @@ binary on `PATH`. Only Linux and macOS runners have a prebuilt release to
 download; on other runners, install with `go install` instead.
 
 > [!CAUTION]
-> If you pair this action with `hashicorp/setup-terraform`, always set
-> **its** `terraform_wrapper` input to `false`. If you need
-> stdout/stderr/exit-code capture, use *this* action's own
-> `terraform_wrapper: true` instead (see below) — never hashicorp's.
->
-> `parraform` execs into whatever is literally named `terraform` on `PATH`.
-> `hashicorp/setup-terraform`'s `terraform_wrapper: true` (its default)
-> installs its own Node.js wrapper under that exact name, so parraform ends
-> up running *that* instead of the real binary. Because `exec` replaces a
-> process's own image in place, this happens *inside* parraform's process,
-> invisibly — nothing on the outside, including this action's own
-> `terraform_wrapper: true`, can detect or undo it after the fact. Left at
-> hashicorp's default, this silently breaks `-detailed-exitcode`: its exit
-> code `2` (changes present) becomes `0` by the time anything watching the
-> real process exit code — parraform itself, a plain `$?` check, or even
-> this action's own wrapper — can see it. Confirmed empirically, including
-> with this action's own wrapper enabled: hashicorp's collapse happens
-> first and unconditionally, so it isn't something parraform's wrapper can
-> compensate for.
+> If you pair this action with `hashicorp/setup-terraform`, always set its `terraform_wrapper` input to `false`.
 
 ### Capturing output (`terraform_wrapper: true`)
 

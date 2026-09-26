@@ -48,24 +48,7 @@ go install github.com/dev-shimada/parraform/cmd/parraform@latest
 runnerのみ。それ以外のrunnerでは`go install`でインストールする。
 
 > [!CAUTION]
-> `hashicorp/setup-terraform`と組み合わせる場合、**同action自身の**
-> `terraform_wrapper`入力は常に`false`にすること。stdout/stderr/exit code
-> のキャプチャが必要なら、hashicorpの方ではなく**このaction自身の**
-> `terraform_wrapper: true`を使う(後述)。
->
-> `parraform`はPATH上で文字通り`terraform`という名前のものにexecする。
-> `hashicorp/setup-terraform`の`terraform_wrapper: true`(デフォルト)は
-> その名前で独自のNode.js wrapperスクリプトを置くので、parraformは実バイナリ
-> ではなくそちらを実行してしまう。execはプロセスの中身をその場で入れ替える
-> 操作のため、これはparraformのプロセスの**内部**で、外からは見えない形で
-> 起きる——このaction自身の`terraform_wrapper: true`を含め、外側の何も
-> 後からこれを検知したり元に戻したりできない。hashicorpのデフォルトの
-> ままだと`-detailed-exitcode`が黙って壊れる: 差分ありを意味する exit code
-> `2`が、生のプロセスexit codeを見る側(parraform自身、素の`$?`チェック、
-> あるいはこのaction自身のwrapperでさえも)から見える時点で`0`になって
-> いる。このaction自身のwrapperを有効にした状態でも実際に確認済み:
-> hashicorp側の潰しはそれより先に無条件で起きるため、parraform側の
-> wrapperでは補正しようがない。
+> `hashicorp/setup-terraform`と組み合わせる場合は、同actionの`terraform_wrapper`入力を常に`false`にしてください。
 
 ### 出力のキャプチャ(`terraform_wrapper: true`)
 
