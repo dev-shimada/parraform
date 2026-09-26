@@ -45,11 +45,8 @@ func runTerraform(argv []string) error {
 
 	env := os.Environ()
 	if tfargs.Subcommand(argv) == "plan" {
-		mode, present, rest := tfargs.LockCheckMode(argv)
+		mode, present, rest := resolveLockCheckMode(argv, env)
 		argv = rest
-		if !present {
-			mode, present = tfargs.LockCheckModeFromPlanEnv(env)
-		}
 		if err := checkLock(os.Stderr, argv, mode, present); err != nil {
 			return err
 		}
@@ -57,6 +54,21 @@ func runTerraform(argv []string) error {
 	}
 
 	return execwrap.Run(bin, append([]string{bin}, argv...), env)
+}
+
+// resolveLockCheckMode determines plan's effective -lock-check mode: an
+// explicit argv flag (see tfargs.LockCheckMode) always wins; when absent, it
+// falls back to one found inside env's TF_CLI_ARGS_plan (see
+// tfargs.LockCheckModeFromPlanEnv), for callers running parraform as a
+// drop-in "terraform" that can't add CLI flags directly (e.g. under
+// Atlantis or terragrunt). rest is argv with the flag stripped, if it was
+// there at all -- terraform must never see it either way it arrived.
+func resolveLockCheckMode(argv []string, env []string) (mode string, present bool, rest []string) {
+	mode, present, rest = tfargs.LockCheckMode(argv)
+	if !present {
+		mode, present = tfargs.LockCheckModeFromPlanEnv(env)
+	}
+	return mode, present, rest
 }
 
 // defaultLockCheckTimeout bounds how long peekLock will wait on a

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -127,6 +128,78 @@ func TestDecideLockAction(t *testing.T) {
 		var buf bytes.Buffer
 		if err := decideLockAction(&buf, "", lockcheck.Info{}, false, false); err == nil {
 			t.Error("decideLockAction() error = nil, want an invalid-mode error for an empty mode")
+		}
+	})
+}
+
+func TestResolveLockCheckMode(t *testing.T) {
+	t.Run("argv flag wins over env", func(t *testing.T) {
+		mode, present, rest := resolveLockCheckMode(
+			[]string{"plan", "-lock-check=strict"},
+			[]string{"TF_CLI_ARGS_plan=-lock-check=warn"},
+		)
+		if mode != "strict" || !present {
+			t.Errorf("resolveLockCheckMode() = (%q, %v), want (%q, true)", mode, present, "strict")
+		}
+		if !reflect.DeepEqual(rest, []string{"plan"}) {
+			t.Errorf("rest = %v, want the flag stripped", rest)
+		}
+	})
+
+	t.Run("falls back to env when argv doesn't have the flag", func(t *testing.T) {
+		mode, present, _ := resolveLockCheckMode(
+			[]string{"plan"},
+			[]string{"TF_CLI_ARGS_plan=-lock-check=strict"},
+		)
+		if mode != "strict" || !present {
+			t.Errorf("resolveLockCheckMode() = (%q, %v), want (%q, true)", mode, present, "strict")
+		}
+	})
+
+	t.Run("neither given", func(t *testing.T) {
+		mode, present, _ := resolveLockCheckMode([]string{"plan"}, []string{"PATH=/bin"})
+		if mode != "" || present {
+			t.Errorf("resolveLockCheckMode() = (%q, %v), want (\"\", false)", mode, present)
+		}
+	})
+}
+
+// TestCheckLock exercises checkLock's own wiring -- mode defaulting,
+// LockOverride detection, and error propagation -- as opposed to the
+// backend peek itself (covered by peekWithTimeout above, and for real by
+// the e2e suite). peekLock always observes locked=false here: it resolves
+// the backend config relative to os.Getwd(), and this package's own source
+// directory has no .terraform/terraform.tfstate cache file, so
+// backendcfg.Discover finds nothing regardless of argv.
+func TestCheckLock(t *testing.T) {
+	t.Run("default mode with nothing locked proceeds silently", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := checkLock(&buf, []string{"-lock-timeout=0s"}, "", false); err != nil {
+			t.Errorf("checkLock() error = %v, want nil", err)
+		}
+		if buf.Len() != 0 {
+			t.Errorf("unexpected output: %q", buf.String())
+		}
+	})
+
+	t.Run("an invalid mode is still a usage error even when nothing is locked", func(t *testing.T) {
+		var buf bytes.Buffer
+		err := checkLock(&buf, nil, "bogus", true)
+		if err == nil {
+			t.Fatal("checkLock() error = nil, want an invalid-mode error")
+		}
+		if !strings.Contains(err.Error(), "bogus") {
+			t.Errorf("error = %q, want it to name the bad value", err.Error())
+		}
+	})
+
+	t.Run("an explicit -lock=true in argv doesn't itself cause an error or output on an unlocked backend", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := checkLock(&buf, []string{"-lock=true"}, "", false); err != nil {
+			t.Errorf("checkLock() error = %v, want nil", err)
+		}
+		if buf.Len() != 0 {
+			t.Errorf("unexpected output on an unlocked backend: %q", buf.String())
 		}
 	})
 }

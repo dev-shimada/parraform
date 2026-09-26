@@ -148,6 +148,7 @@ func TestLockCheckModeFromPlanEnv(t *testing.T) {
 		{"equals form", []string{"TF_CLI_ARGS_plan=-lock-check=strict"}, "strict", true},
 		{"space form among other flags", []string{"TF_CLI_ARGS_plan=-var-file=x.tfvars -lock-check strict"}, "strict", true},
 		{"a quoted argument elsewhere in the value doesn't confuse detection", []string{`TF_CLI_ARGS_plan=-var-file="a b.tfvars" -lock-check=strict`}, "strict", true},
+		{"trailing whitespace after the last token", []string{"TF_CLI_ARGS_plan=-lock-check=strict  "}, "strict", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
