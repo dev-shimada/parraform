@@ -49,6 +49,13 @@ parraform only — pair it with
 binary on `PATH`. Only Linux and macOS runners have a prebuilt release to
 download; on other runners, install with `go install` instead.
 
+If you do pair it with `hashicorp/setup-terraform`, pass
+`terraform_wrapper: false`. That action's default (`true`) replaces the real
+terraform binary on `PATH` with its own Node.js wrapper script — still named
+`terraform`, which is all `parraform` looks for — so parraform ends up
+running that wrapper instead. Confirmed in practice: it silently collapses
+`-detailed-exitcode`'s exit code `2` (changes present) down to `0`.
+
 parraform finds the real `terraform` binary on `PATH` automatically. To point
 it at a specific binary instead, set `PARRAFORM_TERRAFORM_BIN`.
 

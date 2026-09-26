@@ -47,6 +47,13 @@ go install github.com/dev-shimada/parraform/cmd/parraform@latest
 などと組み合わせて使う。ビルド済みリリースがあるのはLinuxとmacOSの
 runnerのみ。それ以外のrunnerでは`go install`でインストールする。
 
+`hashicorp/setup-terraform`と組み合わせる場合は`terraform_wrapper: false`を
+指定すること。同actionのデフォルト(`true`)は実際のterraformバイナリを
+PATH上で同じ`terraform`という名前の独自Node.js wrapperスクリプトに
+差し替えてしまう。`parraform`が探すのはその名前だけなので、wrapperの方を
+実行してしまうことになる。実際に確認したところ、`-detailed-exitcode`の
+exit code `2`(差分あり)が黙って`0`に潰されていた。
+
 terraform実行バイナリはPATHから自動的に見つける。別の場所にあるterraformを
 使いたい場合は `PARRAFORM_TERRAFORM_BIN` で指定する。
 
