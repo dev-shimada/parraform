@@ -148,11 +148,13 @@ jobs:
           parraform plan -detailed-exitcode -input=false
 
       - shell: bash
+        env:
+          PLAN_STDOUT: ${{ steps.plan.outputs.stdout }}
         run: |
           set -euo pipefail
           [ "${{ steps.plan.outcome }}" = "success" ]
           [ "${{ steps.plan.outputs.exitcode }}" = "2" ]
-          case "${{ steps.plan.outputs.stdout }}" in
+          case "$PLAN_STDOUT" in
             *null_resource.x*) ;;
             *) echo "expected stdout output to mention null_resource.x" >&2; exit 1 ;;
           esac
@@ -179,11 +181,13 @@ jobs:
         run: parraform version
 
       - shell: bash
+        env:
+          RUN_STDERR: ${{ steps.run.outputs.stderr }}
         run: |
           set -euo pipefail
           [ "${{ steps.run.outcome }}" = "failure" ]
           [ "${{ steps.run.outputs.exitcode }}" = "1" ]
-          case "${{ steps.run.outputs.stderr }}" in
+          case "$RUN_STDERR" in
             *"terraform binary not found"*) ;;
             *) echo "expected stderr to mention terraform binary not found" >&2; exit 1 ;;
           esac
