@@ -42,13 +42,6 @@ go install github.com/dev-shimada/parraform/cmd/parraform@latest
     version: v0.1.1 # optional; defaults to the latest release
 ```
 
-This adds `parraform` to `PATH` for the rest of the job. It installs
-parraform only — pair it with
-[`hashicorp/setup-terraform`](https://github.com/hashicorp/setup-terraform)
-(or your own terraform install) if you also need the real `terraform`
-binary on `PATH`. Only Linux and macOS runners have a prebuilt release to
-download; on other runners, install with `go install` instead.
-
 > [!CAUTION]
 > If you pair this action with `hashicorp/setup-terraform`, always set its `terraform_wrapper` input to `false`.
 
@@ -66,19 +59,6 @@ download; on other runners, install with `go install` instead.
 - id: plan
   run: parraform plan -detailed-exitcode
 ```
-
-This action has its own `terraform_wrapper` input, named to match
-`hashicorp/setup-terraform`'s input of the same name — it's the
-parraform-side equivalent, installing a wrapper around parraform (not
-terraform itself) that exposes its stdout, stderr, and exit code as outputs
-named `stdout`, `stderr`, and `exitcode` on whichever step actually invokes
-it (the `plan` step above, not this setup step), so a later step can read
-`steps.plan.outputs.exitcode`. It mirrors hashicorp's exit-code handling too
-— `0` or `2` both let the wrapped call succeed — but `exitcode` genuinely
-reflects that either way, as long as hashicorp's own wrapper is disabled
-per the caution above. Defaults to `false`, unlike
-`hashicorp/setup-terraform`'s own default of `true` for its input of the
-same name.
 
 parraform finds the real `terraform` binary on `PATH` automatically. To point
 it at a specific binary instead, set `PARRAFORM_TERRAFORM_BIN`.
