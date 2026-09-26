@@ -75,9 +75,18 @@ parraform plan -lock-check=strict
 | `strict` | はい | plan実行を拒否、exit 1（terraform呼び出しなし） |
 
 これは`-lock`とは独立している: 明示的に`-lock=true`を指定していても、
-terraform自身のロック取得試行（保持中なら失敗する）はそのまま動くが、
-parraform自身の`-lock-check`peekはそれとは別に先に実行され、上表の挙動を
-そのまま適用する。
+terraform自身は通常通りロック取得を試みる（`-lock-timeout`を設定していれば
+即座に失敗せず待機する）が、parraform自身の`-lock-check`peekはそれとは別に
+先に実行され、上表の挙動をそのまま適用する。ロック保持中に`-lock-check=warn`
+（デフォルト）でplanを通す場合、警告文言もこのケースに合わせて調整される
+— 明示的に`-lock=true`を指定しているのに「unlockedで実行する」と表示する
+ことはない。
+
+parraformを`terraform`の差し替えとして動かしていて、CLIフラグを追加できず
+環境変数しか設定できない環境（Atlantis、terragrunt）では、`-lock-check`は
+`TF_CLI_ARGS_plan`経由でも指定できる。例: `TF_CLI_ARGS_plan=-lock-check=strict`。
+同様にその変数からも取り除かれる（理由も同じ）。コマンドラインで直接
+`-lock-check`を指定した場合は、`TF_CLI_ARGS_plan`側の指定より常に優先される。
 
 内部のpeekはbest-effort: 非対応バックエンド、peekのタイムアウト・失敗、
 `PARRAFORM_LOCK_CHECK_TIMEOUT`が`0`以下（チェック自体を無効化）のいずれも

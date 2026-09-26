@@ -293,6 +293,9 @@ func TestE2E_PlanAndTheStateLock(t *testing.T) {
 		if !strings.Contains(out, "state lock is currently held (holder: e2e-test@ci)") {
 			t.Errorf("expected the lock-held warning naming the holder, got:\n%s", out)
 		}
+		if !strings.Contains(out, "running plan unlocked") {
+			t.Errorf("expected the warning to say plan runs unlocked (no explicit -lock=true here), got:\n%s", out)
+		}
 		if !strings.Contains(out, "No changes.") {
 			t.Errorf("expected the plan to still complete, got:\n%s", out)
 		}
@@ -301,6 +304,25 @@ func TestE2E_PlanAndTheStateLock(t *testing.T) {
 			t.Errorf("plan took %v against a locked state, want well under %v (it must not block waiting on the lock)", elapsed, bound)
 		}
 		t.Logf("plan completed in %v despite the held lock", elapsed)
+	})
+
+	t.Run("locked, explicit -lock=true: parraform's warning describes the real outcome, then terraform itself fails acquiring the lock", func(t *testing.T) {
+		plantLock(t)
+		defer clearLock(t)
+
+		out, _, err := runParraform(t, parraformBin, "plan", "-lock-timeout=0s", "-lock=true")
+		if err == nil {
+			t.Fatalf("expected `parraform plan -lock=true` to fail against a locked state (terraform's own lock acquisition), it succeeded:\n%s", out)
+		}
+		if !strings.Contains(out, "-lock=true") {
+			t.Errorf("expected parraform's warning to mention the explicit -lock=true, got:\n%s", out)
+		}
+		if strings.Contains(out, "running plan unlocked") {
+			t.Errorf("parraform's warning must not claim plan runs unlocked when -lock=true is explicit, got:\n%s", out)
+		}
+		if !strings.Contains(out, "Error acquiring the state lock") {
+			t.Errorf("expected terraform's own lock-acquisition error following parraform's warning, got:\n%s", out)
+		}
 	})
 
 	t.Run("unlocked: parraform plan with -lock-check=strict still succeeds (flag is stripped, never reaches terraform)", func(t *testing.T) {
@@ -332,6 +354,49 @@ func TestE2E_PlanAndTheStateLock(t *testing.T) {
 			t.Errorf("refusal took %v, want well under %v (it must fail fast, before even attempting terraform)", elapsed, bound)
 		}
 		t.Logf("plan refused in %v", elapsed)
+	})
+
+	t.Run("unlocked: -lock-check=strict via TF_CLI_ARGS_plan also succeeds (also stripped, never reaches terraform)", func(t *testing.T) {
+		t.Setenv("TF_CLI_ARGS_plan", "-lock-check=strict")
+
+		out, _, err := runParraform(t, parraformBin, "plan", "-lock-timeout=0s")
+		if err != nil {
+			t.Fatalf("parraform plan failed: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "No changes.") {
+			t.Errorf("expected a successful plan, got:\n%s", out)
+		}
+	})
+
+	t.Run("locked: -lock-check=strict via TF_CLI_ARGS_plan refuses too, for callers that can't pass CLI flags (e.g. Atlantis/terragrunt)", func(t *testing.T) {
+		plantLock(t)
+		defer clearLock(t)
+		t.Setenv("TF_CLI_ARGS_plan", "-lock-check=strict")
+
+		out, _, err := runParraform(t, parraformBin, "plan", "-lock-timeout=0s")
+		if err == nil {
+			t.Fatalf("expected parraform plan to fail under TF_CLI_ARGS_plan=-lock-check=strict against a locked state, it succeeded:\n%s", out)
+		}
+		if !strings.Contains(out, "state lock is currently held (holder: e2e-test@ci)") {
+			t.Errorf("expected the refusal to name the holder, got:\n%s", out)
+		}
+		if strings.Contains(out, "No changes.") {
+			t.Errorf("plan must not have run at all, got:\n%s", out)
+		}
+	})
+
+	t.Run("an explicit CLI -lock-check=warn overrides TF_CLI_ARGS_plan's strict", func(t *testing.T) {
+		plantLock(t)
+		defer clearLock(t)
+		t.Setenv("TF_CLI_ARGS_plan", "-lock-check=strict")
+
+		out, _, err := runParraform(t, parraformBin, "plan", "-lock-timeout=0s", "-lock-check=warn")
+		if err != nil {
+			t.Fatalf("parraform plan failed: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "No changes.") {
+			t.Errorf("expected the CLI flag to win over TF_CLI_ARGS_plan and let plan complete, got:\n%s", out)
+		}
 	})
 
 	t.Run("invalid -lock-check value is a parraform-level usage error, not a terraform one", func(t *testing.T) {
