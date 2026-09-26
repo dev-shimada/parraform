@@ -1,0 +1,107 @@
+#!/bin/bash
+# Wraps the real parraform binary (parraform-bin, installed alongside this
+# script by action.yml's `wrapper: true` path) to capture its stdout,
+# stderr, and exit code as GitHub Actions step outputs named `stdout`,
+# `stderr`, and `exitcode` -- the parraform-side equivalent of
+# hashicorp/setup-terraform's `terraform_wrapper`.
+#
+# Exit-code handling deliberately mirrors terraform_wrapper: a real exit
+# code of 0 or 2 (the latter meaning "-detailed-exitcode succeeded with
+# changes present") both make this wrapper itself exit 0, so a later step
+# can branch on `steps.X.outputs.exitcode == '2'` without the plan step
+# itself going red in the UI. Any other real exit code (in practice,
+# terraform/parraform only ever return 1) propagates as this wrapper's own
+# exit code. The real value is always written to the `exitcode` output,
+# regardless of which case applies.
+#
+# Written for bash 3.2 (macOS's system /bin/bash) on purpose: `> >(cmd)`
+# process substitution's backing subshell isn't reliably waitable on that
+# version, which can silently truncate captured output. mkfifo plus an
+# explicitly backgrounded, explicitly waited-on `tee` avoids that.
+#
+# SIGINT/SIGTERM are trapped and forwarded to the real child's PID. This
+# tool exists to manage terraform's state lock correctly, so a cancelled
+# job must still let a running "apply" release its lock on its own way
+# out, rather than have this wrapper swallow the signal and orphan it.
+#
+# `set -m` (job control) is required for that forwarding to work at all:
+# without it, bash sets SIGINT/SIGQUIT to be *ignored* on any child started
+# with a trailing "&" (an "asynchronous list", in POSIX terms), and that
+# ignored disposition survives exec() into the real binary regardless of
+# any trap the child itself installs. Confirmed empirically -- omitting
+# `set -m` here silently made SIGINT forwarding a no-op in testing.
+
+set -u
+set -m
+
+self_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+real_bin="$self_dir/parraform-bin"
+
+work_dir=$(mktemp -d)
+cleanup() {
+  rm -rf "$work_dir"
+}
+trap cleanup EXIT
+
+stdout_fifo="$work_dir/stdout.fifo"
+stderr_fifo="$work_dir/stderr.fifo"
+stdout_capture="$work_dir/stdout.txt"
+stderr_capture="$work_dir/stderr.txt"
+mkfifo "$stdout_fifo" "$stderr_fifo"
+
+tee "$stdout_capture" <"$stdout_fifo" &
+tee_out_pid=$!
+tee "$stderr_capture" <"$stderr_fifo" >&2 &
+tee_err_pid=$!
+
+child_pid=0
+forward_signal() {
+  sig="$1"
+  if [ "$child_pid" -ne 0 ]; then
+    kill "-$sig" "$child_pid" 2>/dev/null
+  fi
+}
+trap 'forward_signal INT' INT
+trap 'forward_signal TERM' TERM
+
+"$real_bin" "$@" >"$stdout_fifo" 2>"$stderr_fifo" &
+child_pid=$!
+
+# A trapped signal can make `wait` return before the child has actually
+# exited (bash reports 128+signum for the interrupted wait itself, not the
+# child's real status). Loop until the child process is confirmed gone, so
+# exit_code always ends up holding its real, final exit status.
+wait "$child_pid" 2>/dev/null
+exit_code=$?
+while kill -0 "$child_pid" 2>/dev/null; do
+  wait "$child_pid" 2>/dev/null
+  exit_code=$?
+done
+
+# The fifos' write ends are now closed (the child that held them open has
+# exited), so each tee will see EOF and finish on its own; wait for that so
+# the capture files are complete before reading them below.
+wait "$tee_out_pid" "$tee_err_pid" 2>/dev/null
+
+write_output() {
+  name="$1"
+  value="$2"
+  if [ -z "${GITHUB_OUTPUT:-}" ]; then
+    return
+  fi
+  delim="ghadelim_${RANDOM}${RANDOM}_$$"
+  {
+    printf '%s<<%s\n' "$name" "$delim"
+    printf '%s\n' "$value"
+    printf '%s\n' "$delim"
+  } >>"$GITHUB_OUTPUT"
+}
+
+write_output stdout "$(cat "$stdout_capture")"
+write_output stderr "$(cat "$stderr_capture")"
+write_output exitcode "$exit_code"
+
+if [ "$exit_code" -eq 0 ] || [ "$exit_code" -eq 2 ]; then
+  exit 0
+fi
+exit "$exit_code"

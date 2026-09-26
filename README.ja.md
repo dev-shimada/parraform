@@ -33,6 +33,32 @@ brew install parraform
 go install github.com/dev-shimada/parraform/cmd/parraform@latest
 ```
 
+### GitHub Actions
+
+```yaml
+- uses: dev-shimada/parraform@v0.1.1
+  with:
+    version: v0.1.1 # 省略可。省略時は最新リリースを取得する
+```
+
+> [!CAUTION]
+> `hashicorp/setup-terraform`と組み合わせる場合は、同actionの`terraform_wrapper`入力を常に`false`にしてください。
+
+### 出力のキャプチャ(`terraform_wrapper: true`)
+
+```yaml
+- uses: hashicorp/setup-terraform@v3
+  with:
+    terraform_wrapper: false # 上記の注意の通り必須
+
+- uses: dev-shimada/parraform@v0.1.1
+  with:
+    terraform_wrapper: true
+
+- id: plan
+  run: parraform plan -detailed-exitcode
+```
+
 terraform実行バイナリはPATHから自動的に見つける。別の場所にあるterraformを
 使いたい場合は `PARRAFORM_TERRAFORM_BIN` で指定する。
 

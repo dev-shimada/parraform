@@ -1,0 +1,211 @@
+name: Test setup-parraform action
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - action.yml
+      - .github/workflows/test-action.yml
+  pull_request:
+    paths:
+      - action.yml
+      - .github/workflows/test-action.yml
+
+permissions:
+  contents: read
+
+jobs:
+  pinned-version:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      - uses: ./
+        id: setup
+        with:
+          version: v0.0.1
+
+      - shell: bash
+        run: |
+          set -euo pipefail
+          [ "${{ steps.setup.outputs.version }}" = "v0.0.1" ]
+          command -v parraform
+          [ "$(command -v parraform)" = "${{ steps.setup.outputs.parraform-path }}" ]
+
+      # v0.0.1 predates -lock-check, so this only proves the binary runs
+      # and passes "version" straight through to the real terraform.
+      - shell: bash
+        run: parraform version
+
+  pinned-version-without-v-prefix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./
+        id: setup
+        with:
+          version: "0.0.1"
+
+      - shell: bash
+        run: '[ "${{ steps.setup.outputs.version }}" = "v0.0.1" ]'
+
+  latest-version:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./
+        id: setup
+
+      - shell: bash
+        run: |
+          set -euo pipefail
+          [ -n "${{ steps.setup.outputs.version }}" ]
+          command -v parraform
+
+  # hashicorp/setup-terraform's terraform_wrapper defaults to true, which
+  # installs its own Node.js wrapper script under the literal name
+  # "terraform" on PATH. tfbin.Resolve() just looks for that name, so
+  # parraform ends up exec'ing the wrapper instead of the real binary. That
+  # wrapper deliberately treats a real exit code of 0 or 2 (the latter from
+  # "-detailed-exitcode") as its own success, exposing the real value only
+  # through its own steps.X.outputs.exitcode -- a GitHub Actions output
+  # neither parraform nor anything else watching the raw process exit code
+  # can read. Confirmed empirically against a real hashicorp/setup-terraform
+  # run before writing this comment and the README warning it backs up:
+  # "-detailed-exitcode"'s 2 silently becomes 0 by the time parraform can
+  # see it. terraform_wrapper: false (below, and in ci.yml's own
+  # integration-test job) avoids this entirely.
+  detailed-exitcode-with-terraform-wrapper-false:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      - uses: ./
+        id: setup
+        with:
+          version: v0.1.1
+
+      - shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/tfdiag && cd /tmp/tfdiag
+          cat > main.tf <<'EOF'
+          resource "null_resource" "x" {}
+          EOF
+          parraform init -input=false
+          set +e
+          parraform plan -detailed-exitcode -input=false
+          code=$?
+          set -e
+          [ "$code" -eq 2 ]
+
+  wrapper-detailed-exitcode:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      - uses: ./
+        with:
+          version: v0.1.1
+          terraform_wrapper: true
+
+      - id: plan
+        shell: bash
+        continue-on-error: true
+        run: |
+          mkdir -p /tmp/tfdiag-wrapper && cd /tmp/tfdiag-wrapper
+          cat > main.tf <<'EOF'
+          resource "null_resource" "x" {}
+          EOF
+          parraform init -input=false
+          parraform plan -detailed-exitcode -input=false
+
+      - shell: bash
+        env:
+          PLAN_STDOUT: ${{ steps.plan.outputs.stdout }}
+        run: |
+          set -euo pipefail
+          [ "${{ steps.plan.outcome }}" = "success" ]
+          [ "${{ steps.plan.outputs.exitcode }}" = "2" ]
+          case "$PLAN_STDOUT" in
+            *null_resource.x*) ;;
+            *) echo "expected stdout output to mention null_resource.x" >&2; exit 1 ;;
+          esac
+
+  wrapper-failure-propagates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Deliberately no hashicorp/setup-terraform here: with no real
+      # terraform on PATH, tfbin.Resolve() fails immediately with a real
+      # exit code 1 -- a fast, reliable way to trigger the "not 0 or 2"
+      # path without needing a genuinely broken terraform config. (This
+      # runs before -lock-check is even parsed, so the message is
+      # tfbin.Resolve()'s, not a -lock-check one.)
+      - uses: ./
+        with:
+          version: v0.1.1
+          terraform_wrapper: true
+
+      - id: run
+        shell: bash
+        continue-on-error: true
+        run: parraform version
+
+      - shell: bash
+        env:
+          RUN_STDERR: ${{ steps.run.outputs.stderr }}
+        run: |
+          set -euo pipefail
+          [ "${{ steps.run.outcome }}" = "failure" ]
+          [ "${{ steps.run.outputs.exitcode }}" = "1" ]
+          case "$RUN_STDERR" in
+            *"terraform binary not found"*) ;;
+            *) echo "expected stderr to mention terraform binary not found" >&2; exit 1 ;;
+          esac
+
+  unsupported-os-fails-clearly:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - id: setup
+        continue-on-error: true
+        uses: ./
+        with:
+          version: v0.0.1
+
+      - shell: pwsh
+        run: |
+          if ("${{ steps.setup.outcome }}" -ne "failure") {
+            Write-Error "expected the action to fail on windows-latest (no prebuilt release), outcome was ${{ steps.setup.outcome }}"
+            exit 1
+          }

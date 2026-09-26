@@ -1,0 +1,143 @@
+name: Setup parraform
+description: >-
+  Download a parraform release and add it to PATH. Installs parraform only
+  -- pair it with hashicorp/setup-terraform (or your own terraform install)
+  if you also need the real terraform binary on PATH.
+author: dev-shimada
+branding:
+  icon: download
+  color: purple
+
+inputs:
+  version:
+    description: >-
+      parraform version to install, e.g. "v0.0.1" (the "v" prefix is
+      optional). Defaults to the latest release.
+    required: false
+    default: latest
+  github-token:
+    description: >-
+      Token used to query and download the release, to avoid GitHub API
+      rate limits. Defaults to the workflow's own github.token.
+    required: false
+    default: ${{ github.token }}
+  terraform_wrapper:
+    description: >-
+      Whether to install a wrapper around parraform that captures its
+      stdout, stderr, and exit code as outputs named `stdout`, `stderr`,
+      and `exitcode` -- named to match hashicorp/setup-terraform's own
+      input of the same name, which this is the parraform-side equivalent
+      of. Exit code handling mirrors it too: a real exit code of 0 or 2
+      (changes present, from `-detailed-exitcode`) both make the wrapped
+      call itself succeed, so a later step can branch on
+      `steps.X.outputs.exitcode == '2'`. Defaults to `false`, unlike
+      hashicorp/setup-terraform's own default of `true` for this input.
+    required: false
+    default: "false"
+
+outputs:
+  version:
+    description: The parraform release tag that was installed.
+    value: ${{ steps.install.outputs.version }}
+  parraform-path:
+    description: Absolute path to the installed parraform binary.
+    value: ${{ steps.install.outputs.parraform-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install parraform
+      id: install
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        VERSION_INPUT: ${{ inputs.version }}
+        WRAPPER_INPUT: ${{ inputs.terraform_wrapper }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+
+        if [ "$WRAPPER_INPUT" != "true" ] && [ "$WRAPPER_INPUT" != "false" ]; then
+          echo "::error::setup-parraform: invalid terraform_wrapper value '$WRAPPER_INPUT' (want 'true' or 'false')." >&2
+          exit 1
+        fi
+
+        case "$RUNNER_OS" in
+          Linux) os=Linux ;;
+          macOS) os=Darwin ;;
+          *)
+            echo "::error::setup-parraform: no prebuilt release exists for $RUNNER_OS (only Linux and macOS are published). Install with 'go install github.com/dev-shimada/parraform/cmd/parraform@${VERSION_INPUT}' instead." >&2
+            exit 1
+            ;;
+        esac
+
+        case "$RUNNER_ARCH" in
+          X64) arch=x86_64 ;;
+          ARM64) arch=arm64 ;;
+          X86) arch=i386 ;;
+          *)
+            echo "::error::setup-parraform: unsupported architecture $RUNNER_ARCH." >&2
+            exit 1
+            ;;
+        esac
+
+        if [ "$VERSION_INPUT" = latest ]; then
+          tag=$(gh release view --repo dev-shimada/parraform --json tagName -q .tagName)
+        else
+          case "$VERSION_INPUT" in
+            v*) tag="$VERSION_INPUT" ;;
+            *) tag="v$VERSION_INPUT" ;;
+          esac
+        fi
+
+        install_dir="${RUNNER_TEMP}/setup-parraform"
+        mkdir -p "$install_dir"
+
+        asset="parraform_${os}_${arch}.tar.gz"
+        checksums_file="parraform_${tag#v}_checksums.txt"
+
+        gh release download "$tag" \
+          --repo dev-shimada/parraform \
+          --pattern "$asset" \
+          --pattern "$checksums_file" \
+          --dir "$install_dir" \
+          --clobber
+
+        # A plain (non "--check") hash computation, since GNU sha256sum,
+        # BSD/macOS sha256sum, and Perl's shasum don't all agree on --check
+        # flag support, but all print the same "<hash>  <filename>" line for
+        # a bare invocation.
+        sha256_of() {
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$1" | awk '{print $1}'
+          elif command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "$1" | awk '{print $1}'
+          else
+            openssl dgst -sha256 "$1" | awk '{print $NF}'
+          fi
+        }
+
+        cd "$install_dir"
+        expected=$(grep " $asset\$" "$checksums_file" | awk '{print $1}')
+        if [ -z "$expected" ]; then
+          echo "::error::setup-parraform: $asset not listed in $checksums_file." >&2
+          exit 1
+        fi
+        actual=$(sha256_of "$asset")
+        if [ "$actual" != "$expected" ]; then
+          echo "::error::setup-parraform: checksum mismatch for $asset (expected $expected, got $actual)." >&2
+          exit 1
+        fi
+
+        tar -xzf "$asset"
+        chmod +x parraform
+
+        if [ "$WRAPPER_INPUT" = "true" ]; then
+          mv parraform parraform-bin
+          cp "$ACTION_PATH/wrapper/parraform" parraform
+          chmod +x parraform
+        fi
+
+        echo "$install_dir" >> "$GITHUB_PATH"
+        echo "version=$tag" >> "$GITHUB_OUTPUT"
+        echo "parraform-path=$install_dir/parraform" >> "$GITHUB_OUTPUT"

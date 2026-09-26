@@ -34,6 +34,32 @@ brew install parraform
 go install github.com/dev-shimada/parraform/cmd/parraform@latest
 ```
 
+### GitHub Actions
+
+```yaml
+- uses: dev-shimada/parraform@v0.1.1
+  with:
+    version: v0.1.1 # optional; defaults to the latest release
+```
+
+> [!CAUTION]
+> If you pair this action with `hashicorp/setup-terraform`, always set its `terraform_wrapper` input to `false`.
+
+### Capturing output (`terraform_wrapper: true`)
+
+```yaml
+- uses: hashicorp/setup-terraform@v3
+  with:
+    terraform_wrapper: false # required -- see the caution above
+
+- uses: dev-shimada/parraform@v0.1.1
+  with:
+    terraform_wrapper: true
+
+- id: plan
+  run: parraform plan -detailed-exitcode
+```
+
 parraform finds the real `terraform` binary on `PATH` automatically. To point
 it at a specific binary instead, set `PARRAFORM_TERRAFORM_BIN`.
 
