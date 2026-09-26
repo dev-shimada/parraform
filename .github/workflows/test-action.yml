@@ -76,6 +76,42 @@ jobs:
           [ -n "${{ steps.setup.outputs.version }}" ]
           command -v parraform
 
+  DIAGNOSTIC-terraform-wrapper-true:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.15.8"
+          # terraform_wrapper defaults to true; left implicit deliberately
+
+      - shell: bash
+        run: |
+          echo "which terraform: $(command -v terraform)"
+          file "$(command -v terraform)" || true
+          head -1 "$(command -v terraform)" || true
+
+      - uses: ./
+        id: setup
+        with:
+          version: v0.1.1
+
+      - shell: bash
+        run: |
+          mkdir -p /tmp/tfdiag && cd /tmp/tfdiag
+          cat > main.tf <<'EOF'
+          resource "null_resource" "x" {}
+          EOF
+          parraform init -input=false
+          set +e
+          parraform plan -detailed-exitcode -input=false
+          echo "OBSERVED_EXIT_CODE=$?"
+          set -e
+
+      - shell: bash
+        run: which parraform && head -c 200 "$(command -v parraform)" | strings | head -3 || true
+
   unsupported-os-fails-clearly:
     runs-on: windows-latest
     steps:
