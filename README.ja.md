@@ -41,12 +41,6 @@ go install github.com/dev-shimada/parraform/cmd/parraform@latest
     version: v0.1.1 # 省略可。省略時は最新リリースを取得する
 ```
 
-ジョブの以降のステップで`parraform`をPATHに追加する。parraformのみを
-インストールするので、実際の`terraform`バイナリも必要な場合は
-[`hashicorp/setup-terraform`](https://github.com/hashicorp/setup-terraform)
-などと組み合わせて使う。ビルド済みリリースがあるのはLinuxとmacOSの
-runnerのみ。それ以外のrunnerでは`go install`でインストールする。
-
 > [!CAUTION]
 > `hashicorp/setup-terraform`と組み合わせる場合は、同actionの`terraform_wrapper`入力を常に`false`にしてください。
 
@@ -64,17 +58,6 @@ runnerのみ。それ以外のrunnerでは`go install`でインストールす�
 - id: plan
   run: parraform plan -detailed-exitcode
 ```
-
-このactionにも`terraform_wrapper`という入力があり、`hashicorp/setup-terraform`
-の同名入力に名前を合わせている——parraform版の相当品で、parraform
-(terraform自体ではなく)をwrapperで包み、stdout・stderr・exit codeを
-`stdout`/`stderr`/`exitcode`というoutputとして(このsetupステップではなく、
-実際にparraformを呼び出した上の`plan`ステップに)公開する。後続ステップから
-`steps.plan.outputs.exitcode`を参照できる。hashicorp側と同様、`0`または`2`の
-どちらでもラップした呼び出し自体は成功扱いになる挙動もそのまま踏襲している
-が、上記の注意の通りhashicorp側のwrapperを無効にしている限り、`exitcode`は
-どちらの場合も実際の値を正しく反映する。デフォルトは`false`
-(`hashicorp/setup-terraform`の同名入力のデフォルト`true`とは異なる)。
 
 terraform実行バイナリはPATHから自動的に見つける。別の場所にあるterraformを
 使いたい場合は `PARRAFORM_TERRAFORM_BIN` で指定する。
