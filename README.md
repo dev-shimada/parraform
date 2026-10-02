@@ -12,10 +12,9 @@
   <a href="#install"><img alt="Homebrew" src="https://img.shields.io/badge/homebrew-dev--shimada%2Fparraform-FBB040?style=flat-square&logo=homebrew&logoColor=white"></a>
 </p>
 
-A transparent wrapper around the `terraform` CLI. `plan` runs without acquiring
-the state lock, eliminating the failures that happen when parallel `plan` runs
-in CI fight over it. Every other command, including `apply`, behaves exactly
-like normal terraform and keeps the usual locking in place.
+A transparent wrapper around the `terraform` CLI.
+`plan` runs without acquiring the state lock, so parallel `plan` runs in CI no longer fail by fighting over it.
+Every other command, including `apply`, behaves exactly like normal terraform and keeps the usual locking.
 
 *(日本語版は[こちら](./README.ja.md))*
 
@@ -34,201 +33,105 @@ brew install parraform
 go install github.com/dev-shimada/parraform/cmd/parraform@latest
 ```
 
-### GitHub Actions
+## GitHub Actions
 
 ```yaml
-- uses: dev-shimada/parraform@v0.1.1
-  with:
-    version: v0.1.1 # optional; defaults to the latest release
+- uses: dev-shimada/parraform@main
 ```
 
 > [!CAUTION]
 > If you pair this action with `hashicorp/setup-terraform`, always set its `terraform_wrapper` input to `false`.
 
+| Input | Default | Description |
+|---|---|---|
+| `version` | `latest` | parraform release to install (e.g. `v0.1.1`) |
+| `terraform_wrapper` | `false` | Capture the output of `parraform` (see below) |
+| `github-token` | `github.token` | Token used to download the release |
+
 ### Capturing output (`terraform_wrapper: true`)
 
-```yaml
-- uses: hashicorp/setup-terraform@v3
-  with:
-    terraform_wrapper: false # required -- see the caution above
+Equivalent to the option of the same name in `hashicorp/setup-terraform`.
+The step that runs `parraform` gets these outputs:
 
-- uses: dev-shimada/parraform@v0.1.1
+| Output | Description |
+|---|---|
+| `stdout` | Standard output of `parraform` |
+| `stderr` | Standard error of `parraform` |
+| `exitcode` | Exit code of `parraform` (the step succeeds for `0` and `2`) |
+
+```yaml
+- uses: hashicorp/setup-terraform@v4
+  with:
+    terraform_wrapper: false
+
+- uses: dev-shimada/parraform@main
   with:
     terraform_wrapper: true
 
-- id: plan
-  run: parraform plan -detailed-exitcode
-```
+- run: parraform init
 
-parraform finds the real `terraform` binary on `PATH` automatically. To point
-it at a specific binary instead, set `PARRAFORM_TERRAFORM_BIN`.
+- id: plan
+  run: parraform plan -detailed-exitcode -out=tfplan
+
+- if: steps.plan.outputs.exitcode == '2'
+  run: parraform apply tfplan
+```
 
 ## Usage
 
-Just call `parraform` instead of `terraform`. Every subcommand and flag is
-passed through unchanged.
+Use `parraform` in place of `terraform`.
+All subcommands and flags are passed through.
 
-```
+```sh
 parraform init
 parraform plan -out=tfplan
 parraform apply tfplan
 ```
 
-You can also drop it onto `PATH` under the name `terraform` in CI, so existing
-pipelines pick it up without any config changes.
+You can also put it on `PATH` under the name `terraform`, so existing pipelines work without changes.
 
-### Lock-check mode
+### Options
 
-`plan`'s backend lock peek (see [What it does](#what-it-does)) defaults to
-printing a warning and proceeding when the lock is held. Pass
-`-lock-check=strict` to refuse running `plan` at all instead, exiting 1
-before terraform is ever invoked:
+| Option | Description |
+|---|---|
+| `-lock-check=warn` (default) | `plan` only. If the state lock is held, prints a warning and runs `plan` anyway |
+| `-lock-check=strict` | `plan` only. If the state lock is held, exits with code 1 without running `plan` |
 
-```
-parraform plan -lock-check=strict
-```
+- If the lock state cannot be determined (unsupported backend, timeout, etc.), `plan` runs in both modes.
+- `-lock-check` can also be set with `TF_CLI_ARGS_plan` (e.g. `TF_CLI_ARGS_plan=-lock-check=strict`). The command line takes precedence.
 
-`-lock-check` is parraform's own flag, not terraform's — it's stripped from
-the arguments before the real `terraform` binary runs, so terraform never
-sees it and never rejects it as unrecognized. It's only meaningful for
-`plan`, accepts `warn` (the default) or `strict`, and — like `-lock` — may
-appear anywhere among the command's arguments.
+### Environment variables
 
-| `-lock-check` | Lock held? | Result |
+| Variable | Default | Description |
 |---|---|---|
-| `warn` (default) | no | plan runs |
-| `warn` (default) | yes | plan runs; warning printed to stderr |
-| `strict` | no | plan runs |
-| `strict` | yes | plan refuses to run; exits 1, no terraform invocation |
-
-This is independent of `-lock`: an explicit `-lock=true` still makes
-terraform itself attempt to acquire the lock as usual (and wait out
-`-lock-timeout` if one is set, rather than failing immediately), but
-parraform's own `-lock-check` peek runs first regardless and applies the
-table above on its own. When the lock is held and `-lock-check=warn` (the
-default) lets plan through, the warning's wording adjusts for this case —
-it won't claim plan is running unlocked when you explicitly asked for the
-opposite.
-
-If you're running parraform as a drop-in `terraform` replacement somewhere
-that only lets you set environment variables, not add CLI flags (Atlantis,
-terragrunt), `-lock-check` can also be given through `TF_CLI_ARGS_plan`
-itself, e.g. `TF_CLI_ARGS_plan=-lock-check=strict`. It's stripped out of
-that variable the same way, for the same reason. A `-lock-check` given
-directly on the command line always takes precedence over one found in
-`TF_CLI_ARGS_plan`.
-
-The underlying peek is best-effort: an unsupported backend, a timed-out or
-failed peek, or `PARRAFORM_LOCK_CHECK_TIMEOUT` set to `0` or below (which
-disables it) all mean "no confirmed lock" — so `strict` only ever blocks on
-a lock it actually observed, never on mere uncertainty.
+| `PARRAFORM_TERRAFORM_BIN` | found on `PATH` | Path of the terraform binary to run |
+| `PARRAFORM_LOCK_CHECK_TIMEOUT` | `3s` | Timeout of the lock check (Go duration). `0` or less disables it |
 
 ### Shell completion
 
-Being cobra-based, it can generate completion scripts for bash/zsh/fish/powershell.
-
-```
+```sh
 parraform completion bash > /etc/bash_completion.d/parraform
 ```
 
+`bash`, `zsh`, `fish`, and `powershell` are supported.
+
 ## What it does
 
-- Only for `plan`, it appends `-lock=false` to `TF_CLI_ARGS_plan`, so the run
-  never acquires the lock. An explicit `-lock=true`/`-lock=false` passed on the
-  command line still takes precedence.
-- Before running `plan`, it performs a read-only peek at the configured
-  backend's actual lock state and prints a warning if another process holds
-  it. By default this never blocks `plan` itself; passing
-  `-lock-check=strict` makes it refuse to run `plan` instead when the lock
-  is confirmed held — see [Lock-check mode](#lock-check-mode).
-- `apply` / `import` / `refresh` / `state mv` and every other command that
-  writes state pass through completely unmodified, keeping terraform's normal
-  locking and checks.
-- It replaces the current process with the real `terraform` binary via
-  `syscall.Exec` (Unix), so stdio, TTY detection, signal handling, and the
-  exit code are byte-for-byte identical to running terraform directly.
+- `plan` runs with `-lock=false` (added to `TF_CLI_ARGS_plan`), so it never takes the state lock. An explicit `-lock=true` or `-lock=false` on the command line takes precedence.
+- Before `plan`, it checks the backend's lock state (read-only) and warns if another process holds it. See `-lock-check`.
+- Other commands (`apply`, `import`, `refresh`, `state mv`, ...) are passed through unchanged and keep terraform's normal locking.
+- On Unix, parraform replaces itself with terraform (`exec`), so stdio, TTY detection, signals, and exit codes are identical to running terraform directly.
 
 ## Why it's safe
 
-`-lock=false` is safe for `plan` because writes to S3/GCS-style backends are
-atomic and read-after-write consistent, so a `plan` running during an `apply`
-can never read a "torn" state. At worst it reads a snapshot from just before
-the `apply` completed — never a corrupted one.
-
-Verified empirically: a plan file saved via `plan -out=` fails explicitly with
-`Error: Saved plan is stale` when `apply <planfile>` is later run against a
-state that changed since the plan was captured. So even in the typical CI
-workflow of saving a plan in one job and applying it in another, an unlocked
-plan that read a slightly stale state fails closed at apply time rather than
-silently applying against outdated assumptions.
-
-The backend lock peek adds one more signal on top of that — letting you know
-an `apply` is in flight. By default it never gates `plan` itself, though
-`-lock-check=strict` opts into exactly that (see
-[Lock-check mode](#lock-check-mode)) for cases where you'd rather fail fast
-and retry than run against a state that might be about to change.
+- Writes to S3/GCS-style backends are atomic and read-after-write consistent, so a `plan` running during an `apply` never reads a corrupted state (at worst, a snapshot from just before the `apply` finished).
+- A plan saved with `plan -out=` fails with `Error: Saved plan is stale` if the state changed before it is applied, so a plan based on an outdated state is never applied silently.
 
 ## Backends the lock check supports
 
-Lock checking is implemented for all 11 backend types terraform currently
-supports for remote state (everything except `local`). The depth of
-verification varies, across three tiers:
-
-| Confidence | What it means | Backends |
-|---|---|---|
-| High | terraform's source was read to confirm the lock mechanism, and the real SDK's outgoing HTTP requests were verified against `httptest` (client-go's fake clientset for kubernetes) | local, s3, gcs, azurerm, consul, kubernetes, cos, oci |
-| Medium | terraform's source was read, but there's been no integration test against a real DB/instance | pg, oss |
-| Scope-limited | Source-verified and tested, but the supported configuration shapes are narrower | remote / cloud (TFC/TFE — only fixed `workspaces.name` is supported, not the `tags`/`project` dynamic-workspace forms) |
-
-The `http` backend has no supported way to peek at all, since terraform's own
-contract for it exposes only `LOCK`/`UNLOCK`, not a read-only check (so
-`-lock=false` still applies, but no lock warning is ever shown).
-
-For every backend, whenever there's doubt about how to extract config or
-interpret the lock mechanism, the checker silently skips the check rather than
-risk a wrong-but-confident answer — `plan` still runs with `-lock=false`.
-
-## Environment variables
-
-| Variable | Description |
+| Backend | Support |
 |---|---|
-| `PARRAFORM_TERRAFORM_BIN` | Explicit path to the terraform binary to use |
-| `PARRAFORM_LOCK_CHECK_TIMEOUT` | Timeout for the lock peek (a Go duration string, default `3s`). This latency is added to every `plan` invocation, so tune it down in environments with slow cloud credential resolution. `0` or negative disables the check entirely |
-
-## Development
-
-```
-go build ./...
-go test ./...
-golangci-lint run ./...
-```
-
-Two kinds of docker-based tests, both gated behind the `integration` build
-tag so the commands above never need docker or a terraform binary:
-
-- The S3 backend's lock checker has an integration test against a real
-  S3/DynamoDB-compatible server ([ministack](https://github.com/ministackorg/ministack)):
-
-  ```
-  go test -tags=integration ./internal/lockcheck/... -run TestS3Integration -v
-  ```
-
-- An end-to-end test builds the actual `parraform` binary and runs it
-  against a real `terraform` binary and ministack, confirming that a real
-  `terraform plan` gets blocked by a held state lock while `parraform plan`
-  does not — and that many concurrent `parraform plan` runs never contend
-  for the lock at all:
-
-  ```
-  go test -tags=integration ./cmd/parraform/ -run TestE2E -v
-  ```
-
-Both skip themselves if docker (or, for the E2E test, terraform) isn't
-installed.
-
-CI runs the same three checks (across Linux/macOS/Windows for build/test)
-on every push and pull request, plus both integration tests on Linux;
-releases are cut by pushing a `v*` tag,
-which [GoReleaser](https://goreleaser.com/) builds and publishes to GitHub
-Releases and the [homebrew-parraform](https://github.com/dev-shimada/homebrew-parraform)
-tap.
+| `local`, `s3`, `gcs`, `azurerm`, `consul`, `kubernetes`, `cos`, `oci` | Supported |
+| `pg`, `oss` | Supported (not verified against a real instance) |
+| `remote`, `cloud` (HCP Terraform / Terraform Enterprise) | Only with a fixed `workspaces.name` (`tags` and `project` are not supported) |
+| `http` | Not supported (terraform has no read-only lock check for it) |
