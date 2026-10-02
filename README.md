@@ -103,7 +103,7 @@ Controls what `plan` does when the state lock is held by another process.
 | `-lock-check=strict` | Exits with code 1 without running `plan` |
 
 - If the lock state cannot be determined (unsupported backend, timeout, etc.), `plan` runs in both modes.
-- It can also be set with `TF_CLI_ARGS_plan` (e.g. `TF_CLI_ARGS_plan=-lock-check=strict`).
+- `-lock-check` can also be set with `TF_CLI_ARGS_plan` (e.g. `TF_CLI_ARGS_plan=-lock-check=strict`).
   - The command line takes precedence.
 
 ### Environment variables

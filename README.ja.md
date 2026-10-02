@@ -16,7 +16,7 @@
 
 `plan` はステートロックを取得せずに実行できるため、CI などで並列に実行した `plan` 同士がロックを奪い合って失敗する問題を防げます。
 
-`apply` を含むそれ以外のコマンドは、通常の terraform と同じように動作し、ロックも従来どおり取得されます。
+`apply` を含むそれ以外のコマンドは、通常の terraform とまったく同じように動作し、ロックも従来どおり取得されます。
 
 *(英語版は[こちら](./README.md))*
 
@@ -83,7 +83,7 @@ go install github.com/dev-shimada/parraform/cmd/parraform@latest
 
 ## 使い方
 
-`terraform` の代わりに `parraform` を実行すると、サブコマンドとオプションはそのまま terraform に渡されます。
+`terraform` の代わりに `parraform` を実行すると、すべてのサブコマンドとオプションがそのまま terraform に渡されます。
 
 ```sh
 parraform init
@@ -103,7 +103,7 @@ parraform apply tfplan
 | `-lock-check=strict` | `plan` を実行せずに、終了コード 1 で終了します |
 
 - ロックの状態を確認できない場合（未対応のバックエンドやタイムアウトなど）は、どちらのモードでも `plan` を実行します。
-- `TF_CLI_ARGS_plan` でも指定できます（例: `TF_CLI_ARGS_plan=-lock-check=strict`）。
+- `-lock-check` は `TF_CLI_ARGS_plan` でも指定できます（例: `TF_CLI_ARGS_plan=-lock-check=strict`）。
   - コマンドラインでの指定が優先されます。
 
 ### 環境変数
