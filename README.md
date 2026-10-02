@@ -14,7 +14,7 @@
 
 A transparent wrapper around the `terraform` CLI.
 
-`plan` runs without acquiring the state lock, so parallel `plan` runs in CI no longer fail by fighting over it.
+`plan` can run without acquiring the state lock, so parallel `plan` runs in CI don't fail by fighting over it.
 
 Every other command, including `apply`, behaves exactly like normal terraform and keeps the usual locking.
 
