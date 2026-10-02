@@ -13,7 +13,9 @@
 </p>
 
 A transparent wrapper around the `terraform` CLI.
+
 `plan` runs without acquiring the state lock, so parallel `plan` runs in CI no longer fail by fighting over it.
+
 Every other command, including `apply`, behaves exactly like normal terraform and keeps the usual locking.
 
 *(日本語版は[こちら](./README.ja.md))*
@@ -50,14 +52,16 @@ go install github.com/dev-shimada/parraform/cmd/parraform@latest
 
 ### Capturing output (`terraform_wrapper: true`)
 
-Equivalent to the option of the same name in `hashicorp/setup-terraform`.
-The step that runs `parraform` gets these outputs:
+Equivalent to the option of the same name in `hashicorp/setup-terraform`, it sets these outputs on the step that runs `parraform`.
 
 | Output | Description |
 |---|---|
 | `stdout` | Standard output of `parraform` |
 | `stderr` | Standard error of `parraform` |
-| `exitcode` | Exit code of `parraform` (the step succeeds for `0` and `2`) |
+| `exitcode` | Exit code of `parraform` |
+
+- The step succeeds when the exit code is `0` or `2`.
+  - `2` means `-detailed-exitcode` found changes.
 
 ```yaml
 - uses: hashicorp/setup-terraform@v4
@@ -79,8 +83,7 @@ The step that runs `parraform` gets these outputs:
 
 ## Usage
 
-Use `parraform` in place of `terraform`.
-All subcommands and flags are passed through.
+Use `parraform` in place of `terraform`, and all subcommands and flags are passed through unchanged.
 
 ```sh
 parraform init
@@ -88,24 +91,30 @@ parraform plan -out=tfplan
 parraform apply tfplan
 ```
 
-You can also put it on `PATH` under the name `terraform`, so existing pipelines work without changes.
+Put it on `PATH` under the name `terraform` to use it in existing pipelines without changes.
 
 ### Options
 
-| Option | Description |
+Controls what `plan` does when the state lock is held by another process.
+
+| Option | Behavior |
 |---|---|
-| `-lock-check=warn` (default) | `plan` only. If the state lock is held, prints a warning and runs `plan` anyway |
-| `-lock-check=strict` | `plan` only. If the state lock is held, exits with code 1 without running `plan` |
+| `-lock-check=warn` (default) | Prints a warning and runs `plan` |
+| `-lock-check=strict` | Exits with code 1 without running `plan` |
 
 - If the lock state cannot be determined (unsupported backend, timeout, etc.), `plan` runs in both modes.
-- `-lock-check` can also be set with `TF_CLI_ARGS_plan` (e.g. `TF_CLI_ARGS_plan=-lock-check=strict`). The command line takes precedence.
+- It can also be set with `TF_CLI_ARGS_plan` (e.g. `TF_CLI_ARGS_plan=-lock-check=strict`).
+  - The command line takes precedence.
 
 ### Environment variables
 
 | Variable | Default | Description |
 |---|---|---|
-| `PARRAFORM_TERRAFORM_BIN` | found on `PATH` | Path of the terraform binary to run |
-| `PARRAFORM_LOCK_CHECK_TIMEOUT` | `3s` | Timeout of the lock check (Go duration). `0` or less disables it |
+| `PARRAFORM_TERRAFORM_BIN` | none | Path of the terraform binary to run |
+| `PARRAFORM_LOCK_CHECK_TIMEOUT` | `3s` | Timeout of the lock check (Go duration) |
+
+- If `PARRAFORM_TERRAFORM_BIN` is not set, terraform is looked up on `PATH`.
+- Setting `PARRAFORM_LOCK_CHECK_TIMEOUT` to `0` or less disables the lock check.
 
 ### Shell completion
 
@@ -114,24 +123,3 @@ parraform completion bash > /etc/bash_completion.d/parraform
 ```
 
 `bash`, `zsh`, `fish`, and `powershell` are supported.
-
-## What it does
-
-- `plan` runs with `-lock=false` (added to `TF_CLI_ARGS_plan`), so it never takes the state lock. An explicit `-lock=true` or `-lock=false` on the command line takes precedence.
-- Before `plan`, it checks the backend's lock state (read-only) and warns if another process holds it. See `-lock-check`.
-- Other commands (`apply`, `import`, `refresh`, `state mv`, ...) are passed through unchanged and keep terraform's normal locking.
-- On Unix, parraform replaces itself with terraform (`exec`), so stdio, TTY detection, signals, and exit codes are identical to running terraform directly.
-
-## Why it's safe
-
-- Writes to S3/GCS-style backends are atomic and read-after-write consistent, so a `plan` running during an `apply` never reads a corrupted state (at worst, a snapshot from just before the `apply` finished).
-- A plan saved with `plan -out=` fails with `Error: Saved plan is stale` if the state changed before it is applied, so a plan based on an outdated state is never applied silently.
-
-## Backends the lock check supports
-
-| Backend | Support |
-|---|---|
-| `local`, `s3`, `gcs`, `azurerm`, `consul`, `kubernetes`, `cos`, `oci` | Supported |
-| `pg`, `oss` | Supported (not verified against a real instance) |
-| `remote`, `cloud` (HCP Terraform / Terraform Enterprise) | Only with a fixed `workspaces.name` (`tags` and `project` are not supported) |
-| `http` | Not supported (terraform has no read-only lock check for it) |
