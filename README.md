@@ -95,16 +95,20 @@ Put it on `PATH` under the name `terraform` to use it in existing pipelines with
 
 ### Options
 
-Controls what `plan` does when the state lock is held by another process.
+Options for `plan`.
 
-| Option | Behavior |
+| Option | Description |
 |---|---|
-| `-lock-check=warn` (default) | Prints a warning and runs `plan` |
-| `-lock-check=strict` | Exits with code 1 without running `plan` |
+| `-lock=false` (default) | Does not acquire the state lock |
+| `-lock=true` | Acquires the state lock |
+| `-lock-check=warn` (default) | If the lock is held, prints a warning and runs `plan` |
+| `-lock-check=strict` | If the lock is held, exits with code 1 without running `plan` |
 
-- If the lock state cannot be determined (unsupported backend, timeout, etc.), `plan` runs in both modes.
+- `-lock` is terraform's own option, and parraform only changes its default for `plan` to `false`.
+- If the lock state cannot be determined (unsupported backend, timeout, etc.), `-lock-check` runs `plan` in both modes.
 - `-lock-check` can also be set with `TF_CLI_ARGS_plan` (e.g. `TF_CLI_ARGS_plan=-lock-check=strict`).
   - The command line takes precedence.
+- Commands other than `plan` (`apply`, `import`, `state mv`, ...) are passed through unchanged.
 
 ### Environment variables
 
