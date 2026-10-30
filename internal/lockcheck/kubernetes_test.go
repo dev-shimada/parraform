@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	coordinationv1 "k8s.io/api/coordination/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -83,8 +82,8 @@ func TestPeekKubernetesLease_ExistsButNotLocked(t *testing.T) {
 	// Mirrors terraform's Unlock(): the lease persists but HolderIdentity
 	// is cleared back to nil rather than the lease being deleted.
 	lease := &coordinationv1.Lease{
-		ObjectMeta: metav1.ObjectMeta{Name: "lock-tfstate-default-state", Namespace: "default"},
-		Spec:       coordinationv1.LeaseSpec{HolderIdentity: nil},
+		Name: "lock-tfstate-default-state", Namespace: "default",
+		Spec: coordinationv1.LeaseSpec{HolderIdentity: nil},
 	}
 	client := fake.NewSimpleClientset(lease)
 
@@ -103,12 +102,10 @@ func TestPeekKubernetesLease_ExistsButNotLocked(t *testing.T) {
 func TestPeekKubernetesLease_Locked(t *testing.T) {
 	holder := "abc-123"
 	lease := &coordinationv1.Lease{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "lock-tfstate-default-state",
-			Namespace: "default",
-			Annotations: map[string]string{
-				kubernetesLockInfoAnnotation: `{"ID":"abc-123","Who":"runner@github-actions"}`,
-			},
+		Name:      "lock-tfstate-default-state",
+		Namespace: "default",
+		Annotations: map[string]string{
+			kubernetesLockInfoAnnotation: `{"ID":"abc-123","Who":"runner@github-actions"}`,
 		},
 		Spec: coordinationv1.LeaseSpec{HolderIdentity: &holder},
 	}
@@ -175,9 +172,9 @@ func TestKubernetesChecker_Peek_EndToEnd(t *testing.T) {
 			return
 		}
 		lease := coordinationv1.Lease{
-			TypeMeta:   metav1.TypeMeta{Kind: "Lease", APIVersion: "coordination.k8s.io/v1"},
-			ObjectMeta: metav1.ObjectMeta{Name: "lock-tfstate-staging-state", Namespace: "default"},
-			Spec:       coordinationv1.LeaseSpec{HolderIdentity: &holder},
+			Kind: "Lease", APIVersion: "coordination.k8s.io/v1",
+			Name: "lock-tfstate-staging-state", Namespace: "default",
+			Spec: coordinationv1.LeaseSpec{HolderIdentity: &holder},
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(lease)
