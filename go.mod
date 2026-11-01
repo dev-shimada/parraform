@@ -17,7 +17,7 @@ require (
 	github.com/hashicorp/consul/api v1.34.4
 	github.com/hashicorp/go-tfe v1.111.0
 	github.com/jackc/pgx/v5 v5.11.0
-	github.com/oracle/oci-go-sdk/v65 v65.124.0
+	github.com/oracle/oci-go-sdk/v65 v65.128.0
 	github.com/spf13/cobra v1.10.2
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.75
 	google.golang.org/api v0.295.0
@@ -144,7 +144,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.45.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/crypto v0.55.0 // indirect
+	golang.org/x/crypto v0.56.0 // indirect
 	golang.org/x/exp v0.0.0-20260813180055-c1d0aacb2297 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
