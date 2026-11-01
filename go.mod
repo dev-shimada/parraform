@@ -8,12 +8,12 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.2
 	github.com/aliyun/aliyun-tablestore-go-sdk v1.9.3
-	github.com/aws/aws-sdk-go-v2 v1.45.1
+	github.com/aws/aws-sdk-go-v2 v1.47.5
 	github.com/aws/aws-sdk-go-v2/config v1.33.1
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.1
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.65.1
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.109.1
-	github.com/aws/smithy-go v1.28.1
+	github.com/aws/smithy-go v1.28.7
 	github.com/hashicorp/consul/api v1.34.4
 	github.com/hashicorp/go-tfe v1.111.0
 	github.com/jackc/pgx/v5 v5.10.0
