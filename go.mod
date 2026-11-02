@@ -19,7 +19,7 @@ require (
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/oracle/oci-go-sdk/v65 v65.124.0
 	github.com/spf13/cobra v1.10.2
-	github.com/tencentyun/cos-go-sdk-v5 v0.7.75
+	github.com/tencentyun/cos-go-sdk-v5 v0.7.76
 	google.golang.org/api v0.295.0
 	k8s.io/api v0.37.0
 	k8s.io/apimachinery v0.37.0
