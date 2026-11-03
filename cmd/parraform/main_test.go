@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -45,12 +48,14 @@ func TestPeekWithTimeout_BoundsCtxIgnoringChecker(t *testing.T) {
 }
 
 func TestDecideLockAction(t *testing.T) {
-	locked := lockcheck.Info{Who: "alice"}
+	held := lockStatus{state: lockHeld, info: lockcheck.Info{Who: "alice"}}
+	free := lockStatus{state: lockFree}
+	unknown := lockStatus{state: lockUnknown, reason: `backend "foo" is not supported by the lock check`}
 
-	t.Run("unlocked proceeds silently in both modes", func(t *testing.T) {
-		for _, mode := range []string{lockCheckWarn, lockCheckStrict} {
+	t.Run("a confirmed-free lock proceeds silently in every mode", func(t *testing.T) {
+		for _, mode := range []string{lockCheckWarn, lockCheckStrict, lockCheckRequire} {
 			var buf bytes.Buffer
-			if err := decideLockAction(&buf, mode, lockcheck.Info{}, false, false); err != nil {
+			if err := decideLockAction(&buf, mode, free, false); err != nil {
 				t.Errorf("mode %q: decideLockAction() error = %v, want nil", mode, err)
 			}
 			if buf.Len() != 0 {
@@ -59,9 +64,42 @@ func TestDecideLockAction(t *testing.T) {
 		}
 	})
 
+	t.Run("an undetermined lock proceeds silently in warn and strict (fail-open)", func(t *testing.T) {
+		for _, mode := range []string{lockCheckWarn, lockCheckStrict} {
+			var buf bytes.Buffer
+			if err := decideLockAction(&buf, mode, unknown, false); err != nil {
+				t.Errorf("mode %q: decideLockAction() error = %v, want nil", mode, err)
+			}
+			if buf.Len() != 0 {
+				t.Errorf("mode %q: unexpected output on an undetermined lock: %q", mode, buf.String())
+			}
+		}
+	})
+
+	t.Run("an undetermined lock refuses in require, naming the reason", func(t *testing.T) {
+		var buf bytes.Buffer
+		err := decideLockAction(&buf, lockCheckRequire, unknown, false)
+		if err == nil {
+			t.Fatal("decideLockAction() error = nil, want an error refusing to run plan")
+		}
+		if !strings.Contains(err.Error(), unknown.reason) {
+			t.Errorf("error = %q, want it to include the reason %q", err.Error(), unknown.reason)
+		}
+		if buf.Len() != 0 {
+			t.Errorf("unexpected stderr output in require mode: %q", buf.String())
+		}
+	})
+
+	t.Run("the zero lockStatus is undetermined, never free", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := decideLockAction(&buf, lockCheckRequire, lockStatus{}, false); err == nil {
+			t.Error("decideLockAction() error = nil, want require to refuse a zero-value status")
+		}
+	})
+
 	t.Run("locked and warn prints a warning naming the holder and proceeds", func(t *testing.T) {
 		var buf bytes.Buffer
-		if err := decideLockAction(&buf, lockCheckWarn, locked, true, false); err != nil {
+		if err := decideLockAction(&buf, lockCheckWarn, held, false); err != nil {
 			t.Errorf("decideLockAction() error = %v, want nil", err)
 		}
 		if !strings.Contains(buf.String(), "alice") {
@@ -74,7 +112,7 @@ func TestDecideLockAction(t *testing.T) {
 
 	t.Run("locked, warn, and an explicit -lock=true describes the actual outcome instead", func(t *testing.T) {
 		var buf bytes.Buffer
-		if err := decideLockAction(&buf, lockCheckWarn, locked, true, true); err != nil {
+		if err := decideLockAction(&buf, lockCheckWarn, held, true); err != nil {
 			t.Errorf("decideLockAction() error = %v, want nil", err)
 		}
 		if strings.Contains(buf.String(), "running plan unlocked") {
@@ -87,7 +125,7 @@ func TestDecideLockAction(t *testing.T) {
 
 	t.Run("locked and warn falls back to unknown when Who is empty", func(t *testing.T) {
 		var buf bytes.Buffer
-		if err := decideLockAction(&buf, lockCheckWarn, lockcheck.Info{}, true, false); err != nil {
+		if err := decideLockAction(&buf, lockCheckWarn, lockStatus{state: lockHeld}, false); err != nil {
 			t.Errorf("decideLockAction() error = %v, want nil", err)
 		}
 		if !strings.Contains(buf.String(), "unknown") {
@@ -95,38 +133,43 @@ func TestDecideLockAction(t *testing.T) {
 		}
 	})
 
-	t.Run("locked and strict refuses without printing, regardless of an explicit -lock=true", func(t *testing.T) {
-		for _, explicitLockTrue := range []bool{false, true} {
-			var buf bytes.Buffer
-			err := decideLockAction(&buf, lockCheckStrict, locked, true, explicitLockTrue)
-			if err == nil {
-				t.Fatalf("explicitLockTrue=%v: decideLockAction() error = nil, want an error refusing to run plan", explicitLockTrue)
-			}
-			if !strings.Contains(err.Error(), "alice") {
-				t.Errorf("explicitLockTrue=%v: error = %q, want it to name the holder", explicitLockTrue, err.Error())
-			}
-			if buf.Len() != 0 {
-				t.Errorf("explicitLockTrue=%v: unexpected stderr output in strict mode: %q", explicitLockTrue, buf.String())
+	t.Run("locked and strict/require refuse without printing, regardless of an explicit -lock=true", func(t *testing.T) {
+		for _, mode := range []string{lockCheckStrict, lockCheckRequire} {
+			for _, explicitLockTrue := range []bool{false, true} {
+				var buf bytes.Buffer
+				err := decideLockAction(&buf, mode, held, explicitLockTrue)
+				if err == nil {
+					t.Fatalf("mode %q, explicitLockTrue=%v: decideLockAction() error = nil, want an error refusing to run plan", mode, explicitLockTrue)
+				}
+				if !strings.Contains(err.Error(), "alice") {
+					t.Errorf("mode %q, explicitLockTrue=%v: error = %q, want it to name the holder", mode, explicitLockTrue, err.Error())
+				}
+				if !strings.Contains(err.Error(), "-lock-check="+mode) {
+					t.Errorf("mode %q, explicitLockTrue=%v: error = %q, want it to name the mode", mode, explicitLockTrue, err.Error())
+				}
+				if buf.Len() != 0 {
+					t.Errorf("mode %q, explicitLockTrue=%v: unexpected stderr output: %q", mode, explicitLockTrue, buf.String())
+				}
 			}
 		}
 	})
 
 	t.Run("unrecognized mode is a usage error regardless of lock state", func(t *testing.T) {
-		for _, locked := range []bool{true, false} {
+		for _, st := range []lockStatus{held, free, unknown} {
 			var buf bytes.Buffer
-			err := decideLockAction(&buf, "bogus", lockcheck.Info{}, locked, false)
+			err := decideLockAction(&buf, "bogus", st, false)
 			if err == nil {
-				t.Fatalf("locked=%v: decideLockAction() error = nil, want an invalid-mode error", locked)
+				t.Fatalf("state=%v: decideLockAction() error = nil, want an invalid-mode error", st.state)
 			}
 			if !strings.Contains(err.Error(), "bogus") {
-				t.Errorf("locked=%v: error = %q, want it to name the bad value", locked, err.Error())
+				t.Errorf("state=%v: error = %q, want it to name the bad value", st.state, err.Error())
 			}
 		}
 	})
 
 	t.Run("empty mode is a usage error", func(t *testing.T) {
 		var buf bytes.Buffer
-		if err := decideLockAction(&buf, "", lockcheck.Info{}, false, false); err == nil {
+		if err := decideLockAction(&buf, "", free, false); err == nil {
 			t.Error("decideLockAction() error = nil, want an invalid-mode error for an empty mode")
 		}
 	})
@@ -167,10 +210,11 @@ func TestResolveLockCheckMode(t *testing.T) {
 // TestCheckLock exercises checkLock's own wiring -- mode defaulting,
 // LockOverride detection, and error propagation -- as opposed to the
 // backend peek itself (covered by peekWithTimeout above, and for real by
-// the e2e suite). peekLock always observes locked=false here: it resolves
-// the backend config relative to os.Getwd(), and this package's own source
-// directory has no .terraform/terraform.tfstate cache file, so
-// backendcfg.Discover finds nothing regardless of argv.
+// the e2e suite, and TestPeekLock below). peekLock never observes a held
+// lock here: it resolves the backend config relative to os.Getwd(), and
+// this package's own source directory has no .terraform/terraform.tfstate
+// cache file, so backendcfg.Discover finds nothing regardless of argv --
+// which is "undetermined", so only -lock-check=require objects.
 func TestCheckLock(t *testing.T) {
 	t.Run("default mode with nothing locked proceeds silently", func(t *testing.T) {
 		var buf bytes.Buffer
@@ -200,6 +244,172 @@ func TestCheckLock(t *testing.T) {
 		}
 		if buf.Len() != 0 {
 			t.Errorf("unexpected output on an unlocked backend: %q", buf.String())
+		}
+	})
+}
+
+// stubChecker is a lockcheck.Checker with a canned Peek result, registered
+// under a throwaway backend type so TestPeekLock can drive every branch of
+// peekLock without a real backend.
+type stubChecker struct {
+	info      lockcheck.Info
+	supported bool
+	err       error
+}
+
+func (s stubChecker) Peek(context.Context, backendcfg.Config) (lockcheck.Info, bool, error) {
+	return s.info, s.supported, s.err
+}
+
+func TestPeekLock(t *testing.T) {
+	lockcheck.Register("stub-free", stubChecker{supported: true})
+	lockcheck.Register("stub-held", stubChecker{info: lockcheck.Info{Locked: true, Who: "alice"}, supported: true})
+	lockcheck.Register("stub-unsupported", stubChecker{supported: false})
+	lockcheck.Register("stub-error", stubChecker{supported: true, err: errors.New("AccessDenied")})
+	lockcheck.Register("stub-timeout", stubChecker{supported: true, err: context.DeadlineExceeded})
+
+	// backendDir returns a directory whose .terraform/terraform.tfstate
+	// names the given backend type, for use via -chdir.
+	backendDir := func(t *testing.T, backendType string) string {
+		t.Helper()
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, ".terraform"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		cache := `{"version":3,"backend":{"type":"` + backendType + `","config":{}}}`
+		if err := os.WriteFile(filepath.Join(dir, ".terraform", "terraform.tfstate"), []byte(cache), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+
+	tests := []struct {
+		name       string
+		setup      func(t *testing.T) []string // returns argv
+		wantState  lockState
+		wantReason string // substring, for lockUnknown
+	}{
+		{
+			name:      "the backend reports the lock free",
+			setup:     func(t *testing.T) []string { return []string{"-chdir=" + backendDir(t, "stub-free"), "plan"} },
+			wantState: lockFree,
+		},
+		{
+			name:      "the backend reports the lock held",
+			setup:     func(t *testing.T) []string { return []string{"-chdir=" + backendDir(t, "stub-held"), "plan"} },
+			wantState: lockHeld,
+		},
+		{
+			name:       "no cache file (uninitialized, or an implicit local backend)",
+			setup:      func(t *testing.T) []string { return []string{"-chdir=" + t.TempDir(), "plan"} },
+			wantState:  lockUnknown,
+			wantReason: "no initialized backend",
+		},
+		{
+			name: "an unreadable cache file",
+			setup: func(t *testing.T) []string {
+				dir := backendDir(t, "x")
+				if err := os.WriteFile(filepath.Join(dir, ".terraform", "terraform.tfstate"), []byte("{not json"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return []string{"-chdir=" + dir, "plan"}
+			},
+			wantState:  lockUnknown,
+			wantReason: "reading the backend config",
+		},
+		{
+			name:       "a backend type with no checker",
+			setup:      func(t *testing.T) []string { return []string{"-chdir=" + backendDir(t, "no-such-backend"), "plan"} },
+			wantState:  lockUnknown,
+			wantReason: `backend "no-such-backend" is not supported`,
+		},
+		{
+			name:       "a supported backend whose lock is not configured",
+			setup:      func(t *testing.T) []string { return []string{"-chdir=" + backendDir(t, "stub-unsupported"), "plan"} },
+			wantState:  lockUnknown,
+			wantReason: "cannot be checked",
+		},
+		{
+			name:       "the peek itself fails",
+			setup:      func(t *testing.T) []string { return []string{"-chdir=" + backendDir(t, "stub-error"), "plan"} },
+			wantState:  lockUnknown,
+			wantReason: "AccessDenied",
+		},
+		{
+			name:       "the peek times out",
+			setup:      func(t *testing.T) []string { return []string{"-chdir=" + backendDir(t, "stub-timeout"), "plan"} },
+			wantState:  lockUnknown,
+			wantReason: "PARRAFORM_LOCK_CHECK_TIMEOUT",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("PARRAFORM_LOCK_CHECK_TIMEOUT", "")
+			got := peekLock(tt.setup(t))
+			if got.state != tt.wantState {
+				t.Fatalf("state = %v (reason %q), want %v", got.state, got.reason, tt.wantState)
+			}
+			if tt.wantState == lockUnknown && !strings.Contains(got.reason, tt.wantReason) {
+				t.Errorf("reason = %q, want it to contain %q", got.reason, tt.wantReason)
+			}
+			if tt.wantState == lockHeld && got.info.Who != "alice" {
+				t.Errorf("info.Who = %q, want %q", got.info.Who, "alice")
+			}
+		})
+	}
+
+	t.Run("a relative -chdir resolves against the working directory", func(t *testing.T) {
+		t.Setenv("PARRAFORM_LOCK_CHECK_TIMEOUT", "")
+		dir := backendDir(t, "stub-held")
+		t.Chdir(filepath.Dir(dir))
+
+		got := peekLock([]string{"-chdir=" + filepath.Base(dir), "plan"})
+		if got.state != lockHeld {
+			t.Errorf("state = %v (reason %q), want lockHeld", got.state, got.reason)
+		}
+	})
+
+	t.Run("a disabled check (timeout <= 0) is undetermined, not free", func(t *testing.T) {
+		t.Setenv("PARRAFORM_LOCK_CHECK_TIMEOUT", "0")
+		got := peekLock([]string{"-chdir=" + backendDir(t, "stub-free"), "plan"})
+		if got.state != lockUnknown || !strings.Contains(got.reason, "disabled") {
+			t.Errorf("peekLock() = %+v, want lockUnknown mentioning the check is disabled", got)
+		}
+	})
+}
+
+func TestCheckLock_Require(t *testing.T) {
+	lockcheck.Register("stub-require-free", stubChecker{supported: true})
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".terraform"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cache := `{"version":3,"backend":{"type":"stub-require-free","config":{}}}`
+	if err := os.WriteFile(filepath.Join(dir, ".terraform", "terraform.tfstate"), []byte(cache), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PARRAFORM_LOCK_CHECK_TIMEOUT", "")
+
+	t.Run("proceeds when the lock is confirmed free", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := checkLock(&buf, []string{"-chdir=" + dir, "plan"}, lockCheckRequire, true); err != nil {
+			t.Errorf("checkLock() error = %v, want nil", err)
+		}
+	})
+
+	t.Run("refuses when no backend can be found", func(t *testing.T) {
+		var buf bytes.Buffer
+		err := checkLock(&buf, []string{"-chdir=" + t.TempDir(), "plan"}, lockCheckRequire, true)
+		if err == nil || !strings.Contains(err.Error(), "-lock-check=require") {
+			t.Errorf("checkLock() error = %v, want a -lock-check=require refusal", err)
+		}
+	})
+
+	t.Run("PARRAFORM_LOCK_CHECK_TIMEOUT=0 cannot be used to bypass it", func(t *testing.T) {
+		t.Setenv("PARRAFORM_LOCK_CHECK_TIMEOUT", "0")
+		var buf bytes.Buffer
+		if err := checkLock(&buf, []string{"-chdir=" + dir, "plan"}, lockCheckRequire, true); err == nil {
+			t.Error("checkLock() error = nil, want a refusal when the check is disabled")
 		}
 	})
 }
