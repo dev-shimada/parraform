@@ -2,15 +2,20 @@ package lockcheck
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awscreds "github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go"
 )
 
 func testAWSConfig() aws.Config {
@@ -249,5 +254,121 @@ func TestS3Checker_Peek_MissingBucketOrKey(t *testing.T) {
 	}
 	if supported {
 		t.Error("Peek() supported = true, want false (missing bucket/key)")
+	}
+}
+
+func TestPeekDynamoDBLock_UsesConsistentRead(t *testing.T) {
+	var body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body = string(b)
+		w.Header().Set("Content-Type", "application/x-amz-json-1.0")
+		_, _ = fmt.Fprint(w, `{}`)
+	}))
+	defer srv.Close()
+
+	client := dynamodb.NewFromConfig(testAWSConfig(), func(o *dynamodb.Options) {
+		o.BaseEndpoint = aws.String(srv.URL)
+	})
+	if _, _, err := peekDynamoDBLock(context.Background(), client, "tf-locks", "my-bucket", "k"); err != nil {
+		t.Fatalf("peekDynamoDBLock() error = %v", err)
+	}
+	if !strings.Contains(body, `"ConsistentRead":true`) {
+		t.Errorf("GetItem request = %s, want ConsistentRead true (an eventually consistent read can miss a just-taken lock)", body)
+	}
+}
+
+type fakeS3 struct {
+	locked bool
+	err    error
+	calls  int
+}
+
+func (f *fakeS3) GetObject(context.Context, *s3.GetObjectInput, ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	if !f.locked {
+		return nil, &smithy.GenericAPIError{Code: "NoSuchKey"}
+	}
+	return &s3.GetObjectOutput{Body: io.NopCloser(strings.NewReader(`{"Who":"s3-holder"}`))}, nil
+}
+
+type fakeDDB struct {
+	locked bool
+	err    error
+	calls  int
+}
+
+func (f *fakeDDB) GetItem(context.Context, *dynamodb.GetItemInput, ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	if !f.locked {
+		return &dynamodb.GetItemOutput{}, nil
+	}
+	return &dynamodb.GetItemOutput{Item: map[string]ddbtypes.AttributeValue{
+		"Info": &ddbtypes.AttributeValueMemberS{Value: `{"Who":"ddb-holder"}`},
+	}}, nil
+}
+
+func TestPeekS3Locks(t *testing.T) {
+	boom := errors.New("AccessDenied")
+
+	tests := []struct {
+		name        string
+		s3          fakeS3
+		ddb         fakeDDB
+		useLockfile bool
+		table       string
+		wantLocked  bool
+		wantWho     string
+		wantErr     bool
+		wantS3Calls int
+		wantDDBCall int
+	}{
+		{name: "lockfile only, free", useLockfile: true, wantS3Calls: 1},
+		{name: "lockfile only, held", s3: fakeS3{locked: true}, useLockfile: true, wantLocked: true, wantWho: "s3-holder", wantS3Calls: 1},
+		{name: "table only, free", table: "t", wantDDBCall: 1},
+		{name: "table only, held", ddb: fakeDDB{locked: true}, table: "t", wantLocked: true, wantWho: "ddb-holder", wantDDBCall: 1},
+		{name: "both configured, both free", useLockfile: true, table: "t", wantS3Calls: 1, wantDDBCall: 1},
+		{
+			// The reviewer's case: no S3 lockfile does not mean no lock.
+			name: "both configured, only the DynamoDB lock held", ddb: fakeDDB{locked: true},
+			useLockfile: true, table: "t", wantLocked: true, wantWho: "ddb-holder", wantS3Calls: 1, wantDDBCall: 1,
+		},
+		{
+			name: "both configured, S3 lockfile held: DynamoDB not consulted", s3: fakeS3{locked: true},
+			useLockfile: true, table: "t", wantLocked: true, wantWho: "s3-holder", wantS3Calls: 1,
+		},
+		{
+			name: "both configured, S3 free but DynamoDB unreadable is an error, not free", ddb: fakeDDB{err: boom},
+			useLockfile: true, table: "t", wantErr: true, wantS3Calls: 1, wantDDBCall: 1,
+		},
+		{
+			name: "both configured, S3 unreadable is an error without trusting DynamoDB", s3: fakeS3{err: boom}, ddb: fakeDDB{},
+			useLockfile: true, table: "t", wantErr: true, wantS3Calls: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info, supported, err := peekS3Locks(context.Background(), &tt.s3, &tt.ddb, "b", "k", tt.useLockfile, tt.table)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr {
+				if !supported {
+					t.Error("supported = false, want true")
+				}
+				if info.Locked != tt.wantLocked || info.Who != tt.wantWho {
+					t.Errorf("info = %+v, want Locked=%v Who=%q", info, tt.wantLocked, tt.wantWho)
+				}
+			}
+			if tt.s3.calls != tt.wantS3Calls || tt.ddb.calls != tt.wantDDBCall {
+				t.Errorf("calls: s3=%d ddb=%d, want s3=%d ddb=%d", tt.s3.calls, tt.ddb.calls, tt.wantS3Calls, tt.wantDDBCall)
+			}
+		})
 	}
 }
