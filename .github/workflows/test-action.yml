@@ -33,6 +33,7 @@ jobs:
         id: setup
         with:
           version: v0.0.1
+          verify-attestation: false
 
       - shell: bash
         run: |
@@ -55,6 +56,7 @@ jobs:
         id: setup
         with:
           version: "0.0.1"
+          verify-attestation: false
 
       - shell: bash
         run: '[ "${{ steps.setup.outputs.version }}" = "v0.0.1" ]'
@@ -103,6 +105,7 @@ jobs:
         id: setup
         with:
           version: v0.1.1
+          verify-attestation: false
 
       - shell: bash
         run: |
@@ -134,6 +137,7 @@ jobs:
       - uses: ./
         with:
           version: v0.1.1
+          verify-attestation: false
           terraform_wrapper: true
 
       - id: plan
@@ -173,6 +177,7 @@ jobs:
       - uses: ./
         with:
           version: v0.1.1
+          verify-attestation: false
           terraform_wrapper: true
 
       - id: run
@@ -209,3 +214,66 @@ jobs:
             Write-Error "expected the action to fail on windows-latest (no prebuilt release), outcome was ${{ steps.setup.outcome }}"
             exit 1
           }
+
+  sha256-pinned:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./
+        with:
+          version: v0.0.1
+          verify-attestation: false
+          sha256: |
+            a2b8c037c8aad2dfca3570e79aca37abb9d4e3ce8e452c77317c67dd77ab939f  parraform_Linux_x86_64.tar.gz
+            03a435aa6c6c638b12a5c666b8ce0c48e0be4f3ea0ce73ccc84ed0de124eaf4c  parraform_Darwin_arm64.tar.gz
+
+      - run: command -v parraform
+
+  sha256-mismatch-fails:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - id: setup
+        continue-on-error: true
+        uses: ./
+        with:
+          version: v0.0.1
+          verify-attestation: false
+          sha256: |
+            0000000000000000000000000000000000000000000000000000000000000000  parraform_Linux_x86_64.tar.gz
+
+      - shell: bash
+        run: '[ "${{ steps.setup.outcome }}" = "failure" ]'
+
+  sha256-with-latest-fails:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - id: setup
+        continue-on-error: true
+        uses: ./
+        with:
+          sha256: |
+            0000000000000000000000000000000000000000000000000000000000000000  parraform_Linux_x86_64.tar.gz
+
+      - shell: bash
+        run: '[ "${{ steps.setup.outcome }}" = "failure" ]'
+
+  # v0.1.1 predates attestations, so the default (verification on) must
+  # refuse it rather than quietly install an unverified binary.
+  unattested-release-is-refused-by-default:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - id: setup
+        continue-on-error: true
+        uses: ./
+        with:
+          version: v0.1.1
+
+      - shell: bash
+        run: '[ "${{ steps.setup.outcome }}" = "failure" ]'

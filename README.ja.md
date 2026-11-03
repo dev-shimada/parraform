@@ -49,6 +49,28 @@ go install github.com/dev-shimada/parraform/cmd/parraform@latest
 | `version` | `latest` | インストールする parraform のバージョンです（例: `v0.1.1`） |
 | `terraform_wrapper` | `false` | `parraform` の実行結果をキャプチャします（後述） |
 | `github-token` | `github.token` | リリースのダウンロードに使うトークンです |
+| `verify-attestation` | `true` | インストール前にアーカイブのビルド証明（provenance）を検証します（後述） |
+| `sha256` | なし | アーカイブの期待する SHA-256 です（後述）。`version` の固定が必要です |
+
+### ダウンロードの検証
+
+アーカイブは次の順に検証され、最初に失敗した時点で止まります。
+
+1. `sha256`（指定した場合）: 利用側のリポジトリに書いたハッシュと一致する必要があります。
+2. `verify-attestation`（デフォルト）: `gh attestation verify` で、このリポジトリの `release.yml` が、そのリリース自身のタグからビルドしたものであることを確認します。
+3. リリースに同梱された `checksums.txt`。アーカイブと同じリリースに置かれているため、ダウンロードの破損しか検知できません。
+
+```yaml
+- uses: dev-shimada/parraform@main
+  with:
+    version: v0.2.0
+    sha256: |
+      <hash>  parraform_Linux_x86_64.tar.gz
+      <hash>  parraform_Darwin_arm64.tar.gz
+```
+
+- `sha256` の行は、リリースの `parraform_<version>_checksums.txt` からコピーします。使うランナーのアーキテクチャごとに1行ずつ記載します。
+- attestation が導入される前のリリース（v0.1.3 以前）は検証できません。インストールするには `verify-attestation: false` を指定してください。
 
 ### 出力のキャプチャ(`terraform_wrapper: true`)
 
