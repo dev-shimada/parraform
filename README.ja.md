@@ -63,14 +63,14 @@ go install github.com/dev-shimada/parraform/cmd/parraform@latest
 ```yaml
 - uses: dev-shimada/parraform@main
   with:
-    version: v0.1.3
+    version: v0.1.4
     sha256: |
       <hash>  parraform_Linux_x86_64.tar.gz
       <hash>  parraform_Darwin_arm64.tar.gz
 ```
 
 - `sha256` の行は、リリースの `parraform_<version>_checksums.txt` からコピーします。使うランナーのアーキテクチャごとに1行ずつ記載します。
-- attestation が導入される前のリリース（v0.1.2 以前）は検証できません。インストールするには `verify-attestation: false` を指定してください。
+- attestation が導入される前のリリース（v0.1.3 以前）は検証できません。インストールするには `verify-attestation: false` を指定してください。
 
 ### 出力のキャプチャ(`terraform_wrapper: true`)
 

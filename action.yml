@@ -26,7 +26,7 @@ inputs:
       Verify the downloaded archive's build provenance attestation with
       `gh attestation verify` before extracting it: it must have been built
       by this repository's release workflow from the release's own tag.
-      Releases published before attestations existed (v0.1.2 and earlier)
+      Releases published before attestations existed (v0.1.3 and earlier)
       have none, so installing one of them requires setting this to
       `false`. Unlike the checksums file, which lives in the same (replaceable)
       release as the archive, this ties the binary to the workflow run that
@@ -173,7 +173,7 @@ runs:
             --signer-workflow dev-shimada/parraform/.github/workflows/release.yml \
             --source-ref "refs/tags/$tag" \
             --deny-self-hosted-runners; then
-            echo "::error::setup-parraform: could not verify the build provenance of $asset from $tag. Releases published before attestations existed (v0.1.2 and earlier) have none: for those, set 'verify-attestation: false'." >&2
+            echo "::error::setup-parraform: could not verify the build provenance of $asset from $tag. Releases published before attestations existed (v0.1.3 and earlier) have none: for those, set 'verify-attestation: false'." >&2
             exit 1
           fi
         fi

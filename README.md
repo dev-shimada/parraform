@@ -63,14 +63,14 @@ The action checks the archive in this order, and stops at the first failure.
 ```yaml
 - uses: dev-shimada/parraform@main
   with:
-    version: v0.1.3
+    version: v0.1.4
     sha256: |
       <hash>  parraform_Linux_x86_64.tar.gz
       <hash>  parraform_Darwin_arm64.tar.gz
 ```
 
 - Copy the `sha256` lines from the release's `parraform_<version>_checksums.txt`. List one line per runner architecture you use.
-- Releases published before attestations existed (v0.1.2 and earlier) cannot be verified. To install one, set `verify-attestation: false`.
+- Releases published before attestations existed (v0.1.3 and earlier) cannot be verified. To install one, set `verify-attestation: false`.
 
 ### Capturing output (`terraform_wrapper: true`)
 
