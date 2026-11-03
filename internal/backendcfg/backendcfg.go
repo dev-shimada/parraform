@@ -35,13 +35,29 @@ type cacheFile struct {
 	} `json:"backend"`
 }
 
-// Discover reads dir/.terraform/terraform.tfstate and returns the backend
+// dataDir mirrors terraform's own resolution of its data directory (where
+// the backend cache and the selected workspace live): TF_DATA_DIR if set,
+// relative to the working directory, otherwise dir/.terraform. Reading
+// .terraform while terraform uses another directory would check the lock of
+// a stale or different backend.
+func dataDir(dir string) string {
+	if d := os.Getenv("TF_DATA_DIR"); d != "" {
+		if filepath.IsAbs(d) {
+			return d
+		}
+		return filepath.Join(dir, d)
+	}
+	return filepath.Join(dir, ".terraform")
+}
+
+// Discover reads the backend cache file (terraform.tfstate in the data
+// directory, normally dir/.terraform, see dataDir) and returns the backend
 // it describes. It returns (nil, nil) when the cache file doesn't exist
 // (e.g. before "terraform init" has run, or a purely local backend that
 // never wrote one) so callers can treat that as "nothing to check" rather
 // than an error.
 func Discover(dir string) (*Config, error) {
-	path := filepath.Join(dir, ".terraform", "terraform.tfstate")
+	path := filepath.Join(dataDir(dir), "terraform.tfstate")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -67,14 +83,15 @@ func Discover(dir string) (*Config, error) {
 }
 
 // currentWorkspace mirrors terraform's own resolution: TF_WORKSPACE
-// overrides everything, otherwise dir/.terraform/environment holds the
-// selected workspace name, and its absence means "default" (terraform
-// never writes that file for the default workspace).
+// overrides everything, otherwise the "environment" file in the data
+// directory (see dataDir) holds the selected workspace name, and its
+// absence means "default" (terraform never writes that file for the default
+// workspace).
 func currentWorkspace(dir string) string {
 	if ws := os.Getenv("TF_WORKSPACE"); ws != "" {
 		return ws
 	}
-	data, err := os.ReadFile(filepath.Join(dir, ".terraform", "environment"))
+	data, err := os.ReadFile(filepath.Join(dataDir(dir), "environment"))
 	if err != nil {
 		return "default"
 	}

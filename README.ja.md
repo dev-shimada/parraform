@@ -108,7 +108,7 @@ parraform apply tfplan
 - `-lock` は terraform のオプションで、parraform は `plan` のデフォルトだけを `false` に変更しています。
 - ロックの状態を確認できない場合（未対応のバックエンドやタイムアウトなど）でも、`warn` と `strict` は `plan` を実行します。
 - `require` は確認できなかった場合に止める（フェイルクローズ）モードで、ロックが空いていることを確認できたときだけ `plan` を実行します。次の場合は理由を表示して終了コード 1 で終了します。
-  - `.terraform/terraform.tfstate` がない、またはバックエンドの記載がない（`init` 未実行、または暗黙のローカルバックエンド）
+  - `.terraform/terraform.tfstate`（`TF_DATA_DIR` 指定時はその配下の `terraform.tfstate`）がない、またはバックエンドの記載がない（`init` 未実行、または暗黙のローカルバックエンド）
   - 未対応のバックエンド、またはロックが設定されていない（例: `dynamodb_table` も `use_lockfile` も未指定の `s3`）
   - 確認がタイムアウトした、または失敗した（例: `dynamodb:GetItem` の権限がない）
   - `PARRAFORM_LOCK_CHECK_TIMEOUT` が `0` 以下

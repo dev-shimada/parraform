@@ -358,6 +358,17 @@ func TestPeekLock(t *testing.T) {
 		})
 	}
 
+	t.Run("a relative -chdir resolves against the working directory", func(t *testing.T) {
+		t.Setenv("PARRAFORM_LOCK_CHECK_TIMEOUT", "")
+		dir := backendDir(t, "stub-held")
+		t.Chdir(filepath.Dir(dir))
+
+		got := peekLock([]string{"-chdir=" + filepath.Base(dir), "plan"})
+		if got.state != lockHeld {
+			t.Errorf("state = %v (reason %q), want lockHeld", got.state, got.reason)
+		}
+	})
+
 	t.Run("a disabled check (timeout <= 0) is undetermined, not free", func(t *testing.T) {
 		t.Setenv("PARRAFORM_LOCK_CHECK_TIMEOUT", "0")
 		got := peekLock([]string{"-chdir=" + backendDir(t, "stub-free"), "plan"})

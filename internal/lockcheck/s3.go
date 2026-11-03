@@ -46,13 +46,26 @@ func (s3Checker) Peek(ctx context.Context, cfg backendcfg.Config) (Info, bool, e
 		return Info{}, false, fmt.Errorf("loading AWS config: %w", err)
 	}
 
-	if useLockfile {
-		client := s3.NewFromConfig(awsCfg)
-		return peekS3Lockfile(ctx, client, bucket, effectiveKey)
-	}
+	return peekS3Locks(ctx, s3.NewFromConfig(awsCfg), dynamodb.NewFromConfig(awsCfg), bucket, effectiveKey, useLockfile, table)
+}
 
-	client := dynamodb.NewFromConfig(awsCfg)
-	return peekDynamoDBLock(ctx, client, table, bucket, effectiveKey)
+// peekS3Locks checks every locking mechanism the backend is configured
+// with. Terraform takes all of them when both use_lockfile and
+// dynamodb_table are set (the migration setup), so the state is only free
+// if each configured lock is: an absent S3 lockfile says nothing about a
+// DynamoDB lock a legacy client may hold. It stops at the first lock it
+// finds held, and at the first mechanism it cannot read.
+func peekS3Locks(ctx context.Context, s3Client s3GetObjectAPI, ddbClient dynamoDBGetItemAPI, bucket, key string, useLockfile bool, table string) (Info, bool, error) {
+	if useLockfile {
+		info, supported, err := peekS3Lockfile(ctx, s3Client, bucket, key)
+		if err != nil || !supported || info.Locked {
+			return info, supported, err
+		}
+	}
+	if table != "" {
+		return peekDynamoDBLock(ctx, ddbClient, table, bucket, key)
+	}
+	return Info{Locked: false}, true, nil
 }
 
 // s3LockTarget resolves the bucket, workspace-qualified object key, and
@@ -159,6 +172,10 @@ func peekDynamoDBLock(ctx context.Context, client dynamoDBGetItemAPI, table, buc
 
 	out, err := client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(table),
+		// An eventually consistent read can miss a lock another process
+		// just took. Terraform reads its own lock item this way too, and
+		// it needs no permission beyond dynamodb:GetItem.
+		ConsistentRead: aws.Bool(true),
 		Key: map[string]ddbtypes.AttributeValue{
 			"LockID": &ddbtypes.AttributeValueMemberS{Value: lockID},
 		},

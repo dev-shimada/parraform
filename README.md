@@ -108,7 +108,7 @@ Options for `plan`.
 - `-lock` is terraform's own option, and parraform only changes its default for `plan` to `false`.
 - If the lock state cannot be determined (unsupported backend, timeout, etc.), `warn` and `strict` run `plan`.
 - `require` is the fail-closed mode: `plan` runs only when the lock was confirmed free. It exits with code 1 and prints the reason when:
-  - `.terraform/terraform.tfstate` is missing or names no backend (not initialized, or an implicit local backend)
+  - `.terraform/terraform.tfstate` (or `terraform.tfstate` under `TF_DATA_DIR`) is missing or names no backend (not initialized, or an implicit local backend)
   - the backend is unsupported, or has no lock configured (e.g. `s3` with neither `dynamodb_table` nor `use_lockfile`)
   - the check times out or fails (e.g. missing `dynamodb:GetItem` permission)
   - `PARRAFORM_LOCK_CHECK_TIMEOUT` is `0` or less

@@ -136,3 +136,66 @@ func TestDiscover_TFWorkspaceEnvOverridesEnvironmentFile(t *testing.T) {
 		t.Errorf("Workspace = %q, want %q (TF_WORKSPACE must win over the environment file)", cfg.Workspace, "production")
 	}
 }
+
+func TestDiscover_TFDataDir(t *testing.T) {
+	// The default .terraform names one backend and the TF_DATA_DIR one
+	// another: Discover must follow TF_DATA_DIR, and never fall back to
+	// the stale default.
+	setup := func(t *testing.T) (dir, custom string) {
+		t.Helper()
+		dir = t.TempDir()
+		writeCacheFile(t, dir, `{"backend":{"type":"gcs","config":{}}}`)
+
+		custom = filepath.Join(dir, "custom-data")
+		if err := os.MkdirAll(custom, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(custom, "terraform.tfstate"), []byte(`{"backend":{"type":"s3","config":{}}}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(custom, "environment"), []byte("staging"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("TF_WORKSPACE", "")
+		return dir, custom
+	}
+
+	t.Run("absolute path", func(t *testing.T) {
+		dir, custom := setup(t)
+		t.Setenv("TF_DATA_DIR", custom)
+
+		cfg, err := Discover(dir)
+		if err != nil || cfg == nil {
+			t.Fatalf("Discover() = (%+v, %v), want a config", cfg, err)
+		}
+		if cfg.Type != "s3" || cfg.Workspace != "staging" {
+			t.Errorf("Discover() = type %q, workspace %q, want s3 / staging from TF_DATA_DIR", cfg.Type, cfg.Workspace)
+		}
+	})
+
+	t.Run("relative path resolves against dir", func(t *testing.T) {
+		dir, _ := setup(t)
+		t.Setenv("TF_DATA_DIR", "custom-data")
+
+		cfg, err := Discover(dir)
+		if err != nil || cfg == nil {
+			t.Fatalf("Discover() = (%+v, %v), want a config", cfg, err)
+		}
+		if cfg.Type != "s3" {
+			t.Errorf("Type = %q, want s3 from the relative TF_DATA_DIR", cfg.Type)
+		}
+	})
+
+	t.Run("a TF_DATA_DIR without a cache is not backed by the stale .terraform", func(t *testing.T) {
+		dir, _ := setup(t)
+		t.Setenv("TF_DATA_DIR", filepath.Join(dir, "empty"))
+
+		cfg, err := Discover(dir)
+		if err != nil {
+			t.Fatalf("Discover() error = %v", err)
+		}
+		if cfg != nil {
+			t.Errorf("Discover() = %+v, want nil: the default .terraform must not be used when TF_DATA_DIR is set", cfg)
+		}
+	})
+}
