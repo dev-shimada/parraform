@@ -21,6 +21,28 @@ inputs:
       rate limits. Defaults to the workflow's own github.token.
     required: false
     default: ${{ github.token }}
+  verify-attestation:
+    description: >-
+      Verify the downloaded archive's build provenance attestation with
+      `gh attestation verify` before extracting it: it must have been built
+      by this repository's release workflow from the release's own tag.
+      Releases published before attestations existed (v0.1.2 and earlier)
+      have none, so installing one of them requires setting this to
+      `false`. Unlike the checksums file, which lives in the same (replaceable)
+      release as the archive, this ties the binary to the workflow run that
+      built it.
+    required: false
+    default: "true"
+  sha256:
+    description: >-
+      Expected SHA-256 of the archive, in `sha256sum` format
+      (`<hash>  <archive name>`, one line per archive; copy the lines you
+      need from the release's `parraform_<version>_checksums.txt`). The
+      archive is rejected unless its hash matches the line for its own name.
+      Because the hash is stored in your own repository, it also protects
+      against a swapped release asset. Requires a pinned `version`.
+    required: false
+    default: ""
   terraform_wrapper:
     description: >-
       Whether to install a wrapper around parraform that captures its
@@ -53,12 +75,24 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
         VERSION_INPUT: ${{ inputs.version }}
         WRAPPER_INPUT: ${{ inputs.terraform_wrapper }}
+        VERIFY_INPUT: ${{ inputs.verify-attestation }}
+        SHA256_INPUT: ${{ inputs.sha256 }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
 
         if [ "$WRAPPER_INPUT" != "true" ] && [ "$WRAPPER_INPUT" != "false" ]; then
           echo "::error::setup-parraform: invalid terraform_wrapper value '$WRAPPER_INPUT' (want 'true' or 'false')." >&2
+          exit 1
+        fi
+
+        if [ "$VERIFY_INPUT" != "true" ] && [ "$VERIFY_INPUT" != "false" ]; then
+          echo "::error::setup-parraform: invalid verify-attestation value '$VERIFY_INPUT' (want 'true' or 'false')." >&2
+          exit 1
+        fi
+
+        if [ -n "$SHA256_INPUT" ] && [ "$VERSION_INPUT" = latest ]; then
+          echo "::error::setup-parraform: 'sha256' needs a pinned 'version': the hash of 'latest' changes with every release." >&2
           exit 1
         fi
 
@@ -118,6 +152,32 @@ runs:
         }
 
         cd "$install_dir"
+
+        # Caller-supplied pin, checked first: it comes from the caller's
+        # repository rather than from the release being installed.
+        if [ -n "$SHA256_INPUT" ]; then
+          pinned=$(printf '%s\n' "$SHA256_INPUT" | awk -v a="$asset" '{f=$2; sub(/^\*/, "", f); if (f == a) print tolower($1)}')
+          if [ -z "$pinned" ]; then
+            echo "::error::setup-parraform: 'sha256' has no line for $asset." >&2
+            exit 1
+          fi
+          if [ "$(sha256_of "$asset")" != "$pinned" ]; then
+            echo "::error::setup-parraform: $asset does not match the pinned 'sha256' (expected $pinned, got $(sha256_of "$asset"))." >&2
+            exit 1
+          fi
+        fi
+
+        if [ "$VERIFY_INPUT" = "true" ]; then
+          if ! gh attestation verify "$asset" \
+            --repo dev-shimada/parraform \
+            --signer-workflow dev-shimada/parraform/.github/workflows/release.yml \
+            --source-ref "refs/tags/$tag" \
+            --deny-self-hosted-runners; then
+            echo "::error::setup-parraform: could not verify the build provenance of $asset from $tag. Releases published before attestations existed (v0.1.2 and earlier) have none: for those, set 'verify-attestation: false'." >&2
+            exit 1
+          fi
+        fi
+
         expected=$(grep " $asset\$" "$checksums_file" | awk '{print $1}')
         if [ -z "$expected" ]; then
           echo "::error::setup-parraform: $asset not listed in $checksums_file." >&2

@@ -49,6 +49,28 @@ go install github.com/dev-shimada/parraform/cmd/parraform@latest
 | `version` | `latest` | parraform release to install (e.g. `v0.1.1`) |
 | `terraform_wrapper` | `false` | Capture the output of `parraform` (see below) |
 | `github-token` | `github.token` | Token used to download the release |
+| `verify-attestation` | `true` | Verify the archive's build provenance before installing (see below) |
+| `sha256` | none | Expected SHA-256 of the archive (see below). Requires a pinned `version` |
+
+### Verifying the download
+
+The action checks the archive in this order, and stops at the first failure.
+
+1. `sha256` (if set): the archive must match the hash you wrote in your own repository.
+2. `verify-attestation` (default): `gh attestation verify` must confirm the archive was built by this repository's `release.yml` from the release's own tag.
+3. The `checksums.txt` published with the release. This only catches a corrupted download, because it is stored in the same release as the archive.
+
+```yaml
+- uses: dev-shimada/parraform@main
+  with:
+    version: v0.1.3
+    sha256: |
+      <hash>  parraform_Linux_x86_64.tar.gz
+      <hash>  parraform_Darwin_arm64.tar.gz
+```
+
+- Copy the `sha256` lines from the release's `parraform_<version>_checksums.txt`. List one line per runner architecture you use.
+- Releases published before attestations existed (v0.1.2 and earlier) cannot be verified. To install one, set `verify-attestation: false`.
 
 ### Capturing output (`terraform_wrapper: true`)
 
