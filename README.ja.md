@@ -63,7 +63,7 @@ go install github.com/dev-shimada/parraform/cmd/parraform@latest
 ```yaml
 - uses: dev-shimada/parraform@main
   with:
-    version: v0.1.4
+    version: v0.2.0
     sha256: |
       <hash>  parraform_Linux_x86_64.tar.gz
       <hash>  parraform_Darwin_arm64.tar.gz
