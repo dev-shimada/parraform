@@ -35,6 +35,10 @@ changelog:
       - "^test:"
 
 release:
+  # Created as a draft, then published by release.yml only after the
+  # artifacts have been attested. Together with the repository's immutable
+  # releases setting, assets can't change once the release is public.
+  draft: true
   footer: >-
 
     ---
