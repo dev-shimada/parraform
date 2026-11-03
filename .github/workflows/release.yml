@@ -23,6 +23,24 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # A re-run after a partial failure leaves the earlier draft behind, and
+      # goreleaser then creates a second one. Publishing by tag name could
+      # then pick the stale draft, whose assets are not the attested ones.
+      # Drafts are invisible to users, so clear them first.
+      - name: Delete stale draft releases for this tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The default Actions shell is bash -e without pipefail, which
+          # would let a failed list request look like "no drafts".
+          set -euo pipefail
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+            --jq ".[] | select(.draft and .tag_name == \"$GITHUB_REF_NAME\") | .id" |
+            while read -r id; do
+              echo "deleting stale draft release $id"
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+            done
+
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           version: "~> v2"
@@ -39,6 +57,29 @@ jobs:
             dist/*.tar.gz
             dist/*_checksums.txt
 
-      - run: gh release edit "$GITHUB_REF_NAME" --draft=false
+      # Publish by release id, and only if the draft's assets are byte for
+      # byte the files that were just attested.
+      - name: Publish the attested draft
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ids=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+            --jq ".[] | select(.draft and .tag_name == \"$GITHUB_REF_NAME\") | .id")
+          if [ "$(printf '%s\n' "$ids" | grep -c .)" -ne 1 ]; then
+            echo "::error::expected exactly one draft release for $GITHUB_REF_NAME, found: ${ids:-none}" >&2
+            exit 1
+          fi
+
+          for f in dist/*.tar.gz dist/*_checksums.txt; do
+            name=$(basename "$f")
+            want="sha256:$(sha256sum "$f" | awk '{print $1}')"
+            got=$(gh api "repos/$GITHUB_REPOSITORY/releases/$ids" \
+              --jq ".assets[] | select(.name == \"$name\") | .digest")
+            if [ "$got" != "$want" ]; then
+              echo "::error::draft asset $name ($got) is not the attested file ($want)" >&2
+              exit 1
+            fi
+          done
+
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$ids" -F draft=false
