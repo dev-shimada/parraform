@@ -385,6 +385,56 @@ func TestE2E_PlanAndTheStateLock(t *testing.T) {
 		}
 	})
 
+	t.Run("unlocked: parraform plan with -lock-check=require succeeds once the lock is confirmed free", func(t *testing.T) {
+		out, _, err := runParraform(t, parraformBin, "plan", "-lock-timeout=0s", "-lock-check=require")
+		if err != nil {
+			t.Fatalf("parraform plan failed: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "No changes.") {
+			t.Errorf("expected a successful plan, got:\n%s", out)
+		}
+	})
+
+	t.Run("locked: parraform plan with -lock-check=require refuses without invoking terraform", func(t *testing.T) {
+		plantLock(t)
+		defer clearLock(t)
+
+		out, _, err := runParraform(t, parraformBin, "plan", "-lock-timeout=0s", "-lock-check=require")
+		if err == nil {
+			t.Fatalf("expected parraform plan to fail under -lock-check=require against a locked state, it succeeded:\n%s", out)
+		}
+		if !strings.Contains(out, "state lock is currently held (holder: e2e-test@ci)") {
+			t.Errorf("expected the refusal to name the holder, got:\n%s", out)
+		}
+		if strings.Contains(out, "No changes.") {
+			t.Errorf("plan must not have run at all under -lock-check=require, got:\n%s", out)
+		}
+	})
+
+	t.Run("undeterminable: -lock-check=require refuses where strict and warn fall open", func(t *testing.T) {
+		// Disabling the check is the simplest deterministic way to make
+		// the peek undetermined while leaving terraform itself working.
+		t.Setenv("PARRAFORM_LOCK_CHECK_TIMEOUT", "0")
+
+		for _, mode := range []string{"warn", "strict"} {
+			out, _, err := runParraform(t, parraformBin, "plan", "-lock-timeout=0s", "-lock-check="+mode)
+			if err != nil {
+				t.Errorf("-lock-check=%s: parraform plan failed, want it to fall open: %v\n%s", mode, err, out)
+			}
+		}
+
+		out, _, err := runParraform(t, parraformBin, "plan", "-lock-timeout=0s", "-lock-check=require")
+		if err == nil {
+			t.Fatalf("expected -lock-check=require to fail when the lock check is disabled, it succeeded:\n%s", out)
+		}
+		if !strings.Contains(out, "could not confirm the state lock is free") {
+			t.Errorf("expected a could-not-confirm refusal, got:\n%s", out)
+		}
+		if strings.Contains(out, "No changes.") {
+			t.Errorf("plan must not have run at all, got:\n%s", out)
+		}
+	})
+
 	t.Run("an explicit CLI -lock-check=warn overrides TF_CLI_ARGS_plan's strict", func(t *testing.T) {
 		plantLock(t)
 		defer clearLock(t)

@@ -103,9 +103,15 @@ parraform apply tfplan
 | `-lock=true` | ステートロックを取得します |
 | `-lock-check=warn`（デフォルト） | ロックが保持されている場合は、警告を表示して `plan` を実行します |
 | `-lock-check=strict` | ロックが保持されている場合は、`plan` を実行せずに終了コード 1 で終了します |
+| `-lock-check=require` | `strict` と同様に動作し、さらにロックが空いていることを確認できない場合も終了コード 1 で終了します |
 
 - `-lock` は terraform のオプションで、parraform は `plan` のデフォルトだけを `false` に変更しています。
-- ロックの状態を確認できない場合（未対応のバックエンドやタイムアウトなど）は、`-lock-check` はどちらのモードでも `plan` を実行します。
+- ロックの状態を確認できない場合（未対応のバックエンドやタイムアウトなど）でも、`warn` と `strict` は `plan` を実行します。
+- `require` は確認できなかった場合に止める（フェイルクローズ）モードで、ロックが空いていることを確認できたときだけ `plan` を実行します。次の場合は理由を表示して終了コード 1 で終了します。
+  - `.terraform/terraform.tfstate` がない、またはバックエンドの記載がない（`init` 未実行、または暗黙のローカルバックエンド）
+  - 未対応のバックエンド、またはロックが設定されていない（例: `dynamodb_table` も `use_lockfile` も未指定の `s3`）
+  - 確認がタイムアウトした、または失敗した（例: `dynamodb:GetItem` の権限がない）
+  - `PARRAFORM_LOCK_CHECK_TIMEOUT` が `0` 以下
 - `-lock-check` は `TF_CLI_ARGS_plan` でも指定できます（例: `TF_CLI_ARGS_plan=-lock-check=strict`）。
   - コマンドラインでの指定が優先されます。
 - `plan` 以外のコマンド（`apply`、`import`、`state mv` など）は、変更せずに terraform に渡されます。
@@ -118,7 +124,7 @@ parraform apply tfplan
 | `PARRAFORM_LOCK_CHECK_TIMEOUT` | `3s` | ロック確認のタイムアウトです（Go の duration 形式） |
 
 - `PARRAFORM_TERRAFORM_BIN` を指定しない場合は、PATH から terraform を探します。
-- `PARRAFORM_LOCK_CHECK_TIMEOUT` に `0` 以下を指定すると、ロック確認を行いません。
+- `PARRAFORM_LOCK_CHECK_TIMEOUT` に `0` 以下を指定すると、ロック確認を行いません（`-lock-check=require` の場合は、代わりに `plan` を拒否します）。
 
 ### シェル補完
 

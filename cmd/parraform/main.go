@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -82,15 +83,45 @@ func resolveLockCheckMode(argv []string, env []string) (mode string, present boo
 // hatch.
 const defaultLockCheckTimeout = 3 * time.Second
 
-// lockCheckWarn and lockCheckStrict are the two -lock-check modes. warn (the
-// default, used when the flag isn't given) prints a warning to stderr and
-// proceeds; strict refuses to run plan at all when the lock is confirmed
-// held. Neither mode ever blocks on mere uncertainty in the peek itself
-// (unsupported backend, timeout, peek error) — see peekLock.
+// lockCheckWarn, lockCheckStrict and lockCheckRequire are the -lock-check
+// modes. warn (the default, used when the flag isn't given) prints a warning
+// to stderr and proceeds; strict refuses to run plan at all when the lock is
+// confirmed held. Neither ever blocks on mere uncertainty in the peek itself
+// (unsupported backend, timeout, peek error) -- that is the project's
+// fail-open default. require is the fail-closed variant of strict: it also
+// refuses when the peek could not confirm the lock is free, so a plan can
+// only proceed once the lock has positively been seen unheld.
 const (
-	lockCheckWarn   = "warn"
-	lockCheckStrict = "strict"
+	lockCheckWarn    = "warn"
+	lockCheckStrict  = "strict"
+	lockCheckRequire = "require"
 )
+
+// lockState is the outcome of a peek. The zero value is lockUnknown on
+// purpose: a peek that forgot to say anything must never read as "free".
+type lockState int
+
+const (
+	// lockUnknown: the peek could not tell (see lockStatus.reason).
+	lockUnknown lockState = iota
+	// lockFree: the peek positively observed that the lock is not held.
+	lockFree
+	// lockHeld: the peek positively observed a held lock.
+	lockHeld
+)
+
+// lockStatus is peekLock's result. info is only meaningful for lockHeld,
+// and reason only for lockUnknown, where it says why the peek could not
+// confirm anything so -lock-check=require can surface it.
+type lockStatus struct {
+	state  lockState
+	info   lockcheck.Info
+	reason string
+}
+
+func unknownLock(format string, args ...any) lockStatus {
+	return lockStatus{state: lockUnknown, reason: fmt.Sprintf(format, args...)}
+}
 
 // checkLock is runTerraform's plan-only lock gate: it peeks at the backend
 // lock (see peekLock) and turns the result into actual behavior via
@@ -101,38 +132,48 @@ func checkLock(w io.Writer, argv []string, mode string, present bool) error {
 	if mode == "" && !present {
 		mode = lockCheckWarn
 	}
-	info, locked := peekLock(argv)
 	explicitLock, lockValue := tfargs.LockOverride(argv)
-	return decideLockAction(w, mode, info, locked, explicitLock && lockValue)
+	return decideLockAction(w, mode, peekLock(argv), explicitLock && lockValue)
 }
 
 // decideLockAction turns a peek result into runTerraform's actual behavior.
-// A confirmed lock (locked=true) prints a warning and proceeds under
-// lockCheckWarn, or refuses to run plan under lockCheckStrict. locked=false
-// always proceeds silently in both modes. An unrecognized (including empty)
-// mode is a usage error, checked before consulting the peek result at all so
-// a typo is never masked by an unlocked backend.
+// A confirmed lock (lockHeld) prints a warning and proceeds under
+// lockCheckWarn, or refuses to run plan under lockCheckStrict and
+// lockCheckRequire. lockFree always proceeds silently. lockUnknown
+// proceeds silently under warn and strict (fail-open) but refuses under
+// require, naming the reason. An unrecognized (including empty) mode is a
+// usage error, checked before consulting the peek result at all so a typo
+// is never masked by an unlocked backend.
 //
 // explicitLockTrue is true when the plan's own arguments set an explicit
 // -lock=true (see tfargs.LockOverride), which wins over PlanEnv's injected
 // -lock=false, so terraform will actually attempt to acquire the lock
 // itself once parraform lets plan proceed. The warn-mode message adjusts
 // for this: claiming "running plan unlocked" would be wrong in that case.
-func decideLockAction(w io.Writer, mode string, info lockcheck.Info, locked bool, explicitLockTrue bool) error {
-	if mode != lockCheckWarn && mode != lockCheckStrict {
-		return fmt.Errorf("invalid -lock-check value %q (want %q or %q)", mode, lockCheckWarn, lockCheckStrict)
+func decideLockAction(w io.Writer, mode string, st lockStatus, explicitLockTrue bool) error {
+	if mode != lockCheckWarn && mode != lockCheckStrict && mode != lockCheckRequire {
+		return fmt.Errorf("invalid -lock-check value %q (want %q, %q or %q)", mode, lockCheckWarn, lockCheckStrict, lockCheckRequire)
 	}
-	if !locked {
+
+	switch st.state {
+	case lockFree:
+		return nil
+	case lockHeld:
+		// handled below
+	default:
+		if mode == lockCheckRequire {
+			return fmt.Errorf("could not confirm the state lock is free: %s; refusing to run plan (-lock-check=require)", st.reason)
+		}
 		return nil
 	}
 
-	who := info.Who
+	who := st.info.Who
 	if who == "" {
 		who = "unknown"
 	}
 
-	if mode == lockCheckStrict {
-		return fmt.Errorf("state lock is currently held (holder: %s); refusing to run plan (-lock-check=strict)", who)
+	if mode == lockCheckStrict || mode == lockCheckRequire {
+		return fmt.Errorf("state lock is currently held (holder: %s); refusing to run plan (-lock-check=%s)", who, mode)
 	}
 
 	situation := "running plan unlocked against a possibly-changing state"
@@ -144,12 +185,13 @@ func decideLockAction(w io.Writer, mode string, info lockcheck.Info, locked bool
 }
 
 // peekLock performs a best-effort, read-only peek at the configured
-// backend's lock. It returns locked=true only when the peek definitively
-// observed a held lock; any uncertainty (missing cache file, unsupported
-// backend, timeout, or peek error) returns locked=false, matching the
-// project's fail-open philosophy — checkLock's strict mode only ever blocks
-// on a *confirmed* lock, never on doubt (see DESIGN.md).
-func peekLock(argv []string) (info lockcheck.Info, locked bool) {
+// backend's lock. It reports lockHeld or lockFree only when the peek
+// definitively observed one; any uncertainty (missing cache file,
+// unsupported backend, timeout, or peek error) is lockUnknown with a
+// reason. Whether that blocks plan is decideLockAction's call: only
+// -lock-check=require does, matching the project's fail-open default
+// otherwise.
+func peekLock(argv []string) lockStatus {
 	timeout := defaultLockCheckTimeout
 	if raw := os.Getenv("PARRAFORM_LOCK_CHECK_TIMEOUT"); raw != "" {
 		if d, err := time.ParseDuration(raw); err == nil {
@@ -157,12 +199,12 @@ func peekLock(argv []string) (info lockcheck.Info, locked bool) {
 		}
 	}
 	if timeout <= 0 {
-		return lockcheck.Info{}, false
+		return unknownLock("the lock check is disabled (PARRAFORM_LOCK_CHECK_TIMEOUT=%s)", os.Getenv("PARRAFORM_LOCK_CHECK_TIMEOUT"))
 	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
-		return lockcheck.Info{}, false
+		return unknownLock("resolving the working directory: %v", err)
 	}
 
 	dir := cwd
@@ -175,20 +217,30 @@ func peekLock(argv []string) (info lockcheck.Info, locked bool) {
 	}
 
 	cfg, err := backendcfg.Discover(dir)
-	if err != nil || cfg == nil {
-		return lockcheck.Info{}, false
+	if err != nil {
+		return unknownLock("reading the backend config in %s: %v", dir, err)
+	}
+	if cfg == nil {
+		return unknownLock("no initialized backend found in %s (.terraform/terraform.tfstate is missing or names no backend; run init first)", dir)
 	}
 
 	checker, ok := lockcheck.For(cfg.Type)
 	if !ok {
-		return lockcheck.Info{}, false
+		return unknownLock("backend %q is not supported by the lock check", cfg.Type)
 	}
 
 	result, supported, err := peekWithTimeout(checker, *cfg, timeout)
-	if err != nil || !supported || !result.Locked {
-		return lockcheck.Info{}, false
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return unknownLock("checking the %s backend lock timed out after %s (raise PARRAFORM_LOCK_CHECK_TIMEOUT)", cfg.Type, timeout)
+	case err != nil:
+		return unknownLock("checking the %s backend lock failed: %v", cfg.Type, err)
+	case !supported:
+		return unknownLock("the %s backend's lock cannot be checked with its current configuration (e.g. s3 with neither dynamodb_table nor use_lockfile)", cfg.Type)
+	case result.Locked:
+		return lockStatus{state: lockHeld, info: result}
 	}
-	return result, true
+	return lockStatus{state: lockFree}
 }
 
 // peekWithTimeout enforces timeout even when checker.Peek doesn't honor

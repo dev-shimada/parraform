@@ -103,9 +103,15 @@ Options for `plan`.
 | `-lock=true` | Acquires the state lock |
 | `-lock-check=warn` (default) | If the lock is held, prints a warning and runs `plan` |
 | `-lock-check=strict` | If the lock is held, exits with code 1 without running `plan` |
+| `-lock-check=require` | Like `strict`, and also exits with code 1 if it cannot confirm the lock is free |
 
 - `-lock` is terraform's own option, and parraform only changes its default for `plan` to `false`.
-- If the lock state cannot be determined (unsupported backend, timeout, etc.), `-lock-check` runs `plan` in both modes.
+- If the lock state cannot be determined (unsupported backend, timeout, etc.), `warn` and `strict` run `plan`.
+- `require` is the fail-closed mode: `plan` runs only when the lock was confirmed free. It exits with code 1 and prints the reason when:
+  - `.terraform/terraform.tfstate` is missing or names no backend (not initialized, or an implicit local backend)
+  - the backend is unsupported, or has no lock configured (e.g. `s3` with neither `dynamodb_table` nor `use_lockfile`)
+  - the check times out or fails (e.g. missing `dynamodb:GetItem` permission)
+  - `PARRAFORM_LOCK_CHECK_TIMEOUT` is `0` or less
 - `-lock-check` can also be set with `TF_CLI_ARGS_plan` (e.g. `TF_CLI_ARGS_plan=-lock-check=strict`).
   - The command line takes precedence.
 - Commands other than `plan` (`apply`, `import`, `state mv`, ...) are passed through unchanged.
@@ -118,7 +124,7 @@ Options for `plan`.
 | `PARRAFORM_LOCK_CHECK_TIMEOUT` | `3s` | Timeout of the lock check (Go duration) |
 
 - If `PARRAFORM_TERRAFORM_BIN` is not set, terraform is looked up on `PATH`.
-- Setting `PARRAFORM_LOCK_CHECK_TIMEOUT` to `0` or less disables the lock check.
+- Setting `PARRAFORM_LOCK_CHECK_TIMEOUT` to `0` or less disables the lock check (with `-lock-check=require`, `plan` is refused instead).
 
 ### Shell completion
 
