@@ -31,6 +31,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # The default Actions shell is bash -e without pipefail, which
+          # would let a failed list request look like "no drafts".
+          set -euo pipefail
           gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
             --jq ".[] | select(.draft and .tag_name == \"$GITHUB_REF_NAME\") | .id" |
             while read -r id; do
