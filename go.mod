@@ -8,7 +8,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.15.0
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.3
 	github.com/aliyun/aliyun-tablestore-go-sdk v1.9.3
-	github.com/aws/aws-sdk-go-v2 v1.47.7
+	github.com/aws/aws-sdk-go-v2 v1.47.8
 	github.com/aws/aws-sdk-go-v2/config v1.33.15
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.15
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.72.3
