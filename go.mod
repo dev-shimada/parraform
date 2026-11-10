@@ -17,7 +17,7 @@ require (
 	github.com/hashicorp/consul/api v1.35.0
 	github.com/hashicorp/go-tfe v1.112.0
 	github.com/jackc/pgx/v5 v5.12.0
-	github.com/oracle/oci-go-sdk/v65 v65.128.0
+	github.com/oracle/oci-go-sdk/v65 v65.129.0
 	github.com/spf13/cobra v1.10.2
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.76
 	google.golang.org/api v0.310.0
